@@ -49,6 +49,30 @@
         </form>
       </div>
     </div>
+    <div id="request-status" class="pill" style="display:inline-block; margin-bottom:18px;">Ready</div>
+    <script>
+      (function () {
+        const status = document.getElementById('request-status');
+        const forms = document.querySelectorAll('form[action="/request"]');
+        forms.forEach(form => {
+          form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            status.textContent = 'Submitting request...';
+            status.className = 'pill submitted';
+            const body = new FormData(form);
+            try {
+              const res = await fetch('/request', { method: 'POST', body });
+              if (!res.ok) throw new Error(await res.text());
+              status.textContent = 'Request queued';
+              status.className = 'pill success';
+            } catch (error) {
+              status.textContent = 'Request failed';
+              status.className = 'pill error';
+            }
+          });
+        });
+      })();
+    </script>
     <div class="grid">
       <div class="panel">
         <h2>Search results</h2>
@@ -88,8 +112,19 @@
             </script>
             <script>
               document.querySelectorAll('form[action="/request"]').forEach(form => {
-                form.addEventListener('submit', () => {
-                  setTimeout(() => window.location.href = '/', 0);
+                form.addEventListener('submit', async (event) => {
+                  event.preventDefault();
+                  const status = document.querySelector('#request-status');
+                  status.textContent = 'Request submitted';
+                  status.className = 'pill submitted';
+                  const body = new FormData(form);
+                  const res = await fetch('/request', { method: 'POST', body });
+                  const data = await res.json();
+                  status.textContent = data.message;
+                  const historyRefresh = await fetch('/');
+                  if (historyRefresh.ok) {
+                    window.location.reload();
+                  }
                 });
               });
             </script>

@@ -101,20 +101,11 @@ class ReadarrClient:
         payload = {
             'authorName': lookup_author.get('authorName') or lookup_author.get('name') or author_name,
             'foreignAuthorId': lookup_author.get('foreignAuthorId'),
-            'monitored': True,
-            'monitorNewItems': 'none',
             'qualityProfileId': quality_profile,
             'metadataProfileId': metadata_profile,
             'rootFolderPath': root_folder,
             'path': path,
-            'addOptions': {
-                'monitor': 'all',
-                'booksToMonitor': [],
-                'searchForMissingBooks': False,
-            },
         }
-        if author_id is not None:
-            payload['id'] = author_id
         return payload
 
     async def _monitor_book(self, client: httpx.AsyncClient, headers: dict[str, str], book_id: int) -> None:

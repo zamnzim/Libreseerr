@@ -73,6 +73,28 @@ def get_request_task(task_id: str) -> RequestTask | None:
     return _tasks.get(task_id)
 
 
+def get_latest_request_task() -> RequestTask | None:
+    if not _order:
+        return None
+    return _tasks.get(_order[0])
+
+
+def get_latest_request_task_id() -> str | None:
+    if not _order:
+        return None
+    return _order[0]
+
+
+def update_request_task(task_id: str, task: RequestTask) -> None:
+    _tasks[task_id] = task
+
+
+def update_request_order(task_id: str) -> None:
+    if task_id in _order:
+        _order.remove(task_id)
+    _order.insert(0, task_id)
+
+
 def retry_request_task(client: ReadarrClient, task_id: str) -> RequestTask:
     previous = _tasks.get(task_id)
     if previous is None:
