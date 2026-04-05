@@ -18,6 +18,7 @@ class ReadarrClient:
             if not book_resource:
                 raise ValueError(f'No Readarr book found for {title}')
             book_id = await self._add_requested_book(client, headers, author_resource, book_resource, goodreads_id)
+            await self._monitor_requested_book(client, headers, author_resource, book_id, book_resource)
             if book_id is not None and author_resource.get('id') is not None:
                 await self._search_book(client, headers, author_resource['id'], book_id)
         return 'Author added, requested book added, search started'
@@ -99,6 +100,22 @@ class ReadarrClient:
             raise ValueError(f'Readarr book add failed: {self._format_error(add_response)}')
         added_book = add_response.json()
         return added_book.get('id') or book.get('id')
+
+    async def _monitor_requested_book(self, client: httpx.AsyncClient, headers: dict[str, str], author: dict, book_id: int | None, book: dict) -> None:
+        if book_id is None or author.get('id') is None:
+            return
+        response = await client.put(f'{self.target.base_url}/api/v1/book/{book_id}', headers=headers, json={
+            'id': book_id,
+            'title': book.get('title'),
+            'author': author,
+            'authorId': author.get('id'),
+            'monitored': True,
+            'anyEditionOk': False,
+            'foreignBookId': book.get('foreignBookId'),
+            'editions': book.get('editions') or [],
+        })
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr book monitor failed: {self._format_error(response)}')
 
     async def _first_root_folder(self, client: httpx.AsyncClient, headers: dict[str, str]) -> str | None:
         response = await client.get(f'{self.target.base_url}/api/v1/rootfolder', headers=headers)
