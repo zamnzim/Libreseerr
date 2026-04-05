@@ -69,6 +69,110 @@ class ReadarrClient:
         if create.status_code >= 400:
             print(f'Readarr author add failed for {author_name}: {self._format_error(create)}')
             raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
+        author = create.json()
+        if author.get('id') is not None:
+            return author
+        return author
+
+    async def _update_author_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int, quality_profile_id: int) -> None:
+        response = await client.put(
+            f'{self.target.base_url}/api/v1/author/{author_id}',
+            headers=headers,
+            json={
+                'qualityProfileId': quality_profile_id,
+            },
+        )
+        if response.status_code >= 400:
+            print(f'Readarr author quality profile update failed for {author_id}: {self._format_error(response)}')
+            raise ValueError(f'Readarr author quality profile update failed: {self._format_error(response)}')
+
+    async def _ensure_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str, author_resource: dict) -> dict:
+        lookup = await client.get(f'{self.target.base_url}/api/v1/book/lookup', headers=headers, params={'term': title})
+        if lookup.status_code >= 400:
+            raise ValueError(f'Readarr book lookup failed: {self._format_error(lookup)}')
+        books = lookup.json()
+        if not books:
+            raise ValueError(f'No Readarr book found for {title}')
+
+        normalized = title.casefold()
+        for book in books:
+            if book.get('title', '').casefold() == normalized:
+                return book
+        for book in books:
+            if normalized in book.get('title', '').casefold():
+                return book
+        return books[0]
+
+    async def _get_author_by_id(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int | None) -> dict | None:
+        if author_id is None:
+            return None
+        response = await client.get(f'{self.target.base_url}/api/v1/author/{author_id}', headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def _build_author_payload(self, lookup_author: dict, author_name: str, root_folder: str) -> dict:
+        path = f"{root_folder.rstrip('/')}/{self._sanitize(author_name)}"
+        return {
+            'authorName': lookup_author.get('authorName') or lookup_author.get('name') or author_name,
+            'path': path,
+            'rootFolderPath': root_folder,
+            'foreignAuthorId': lookup_author.get('foreignAuthorId') or author_name,
+            'qualityProfileId': 1,
+            'metadataProfileId': 1,
+        }
+
+    async def _monitor_book(self, client: httpx.AsyncClient, headers: dict[str, str], book_id: int) -> None:
+        response = await client.put(
+            f'{self.target.base_url}/api/v1/book/monitor',
+            headers=headers,
+            json={'bookIds': [book_id], 'monitored': True},
+        )
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr book monitor failed: {self._format_error(response)}')
+
+    async def _search_book(self, client: httpx.AsyncClient, headers: dict[str, str], book_id: int) -> None:
+        response = await client.post(
+            f'{self.target.base_url}/api/v1/command',
+            headers=headers,
+            json={'name': 'BookSearch', 'bookIds': [book_id]},
+        )
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr book search failed: {self._format_error(response)}')
+
+    async def _first_root_folder(self, client: httpx.AsyncClient, headers: dict[str, str]) -> str | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/rootfolder', headers=headers)
+        if response.status_code >= 400:
+            return None
+        folders = response.json()
+        return folders[0].get('path') if folders else None
+
+    async def _quality_profile_id(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/qualityprofile', headers=headers)
+        if response.status_code >= 400:
+            return None
+        profiles = response.json()
+        target_name = 'Spoken' if self.target.kind == 'audio' else 'eBook'
+        for profile in profiles:
+            if profile.get('name') == target_name:
+                return profile.get('id')
+        raise ValueError(f'Readarr quality profile not found: {target_name}')
+
+    async def _first_metadata_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/metadataprofile', headers=headers)
+        if response.status_code >= 400:
+            return None
+        profiles = response.json()
+        return profiles[0].get('id') if profiles else None
+
+    def _sanitize(self, value: str) -> str:
+        return ''.join(ch if ch.isalnum() or ch in {' ', '-', '_', '.', '(', ')'} else '_' for ch in value).strip().replace('  ', ' ')
+
+    def _format_error(self, response: httpx.Response) -> str:
+        return response.text.strip() or response.reason_phrase
+        if create.status_code >= 400:
+            print(f'Readarr author add failed for {author_name}: {self._format_error(create)}')
+            raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
         return create.json()
 
     async def _update_author_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int, quality_profile_id: int) -> None:
