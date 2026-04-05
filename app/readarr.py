@@ -29,7 +29,7 @@ class ReadarrClient:
             book_resource = books[0]
             editions = book_resource.get('editions') or []
             if not editions:
-                raise ValueError(f'Readarr book has no editions for {title}')
+                return await self._request_by_lookup(client, headers, title, author_resource, goodreads_id)
 
             payload = {
                 'title': book_resource.get('title', title),
@@ -49,4 +49,21 @@ class ReadarrClient:
             detail = response.text.strip() or response.reason_phrase
             raise ValueError(f'Readarr rejected request: {detail}')
 
+        return 'Requested successfully'
+
+    async def _request_by_lookup(self, client: httpx.AsyncClient, headers: dict[str, str], title: str, author_resource: dict, goodreads_id: str | None) -> str:
+        payload = {
+            'title': title,
+            'author': author_resource,
+            'foreignBookId': goodreads_id,
+            'monitored': True,
+            'searchForNewBook': True,
+            'addOptions': {
+                'searchForBook': True,
+            },
+        }
+        response = await client.post(f'{self.target.base_url}/api/v1/book', headers=headers, json=payload)
+        if response.status_code >= 400:
+            detail = response.text.strip() or response.reason_phrase
+            raise ValueError(f'Readarr rejected request: {detail}')
         return 'Requested successfully'
