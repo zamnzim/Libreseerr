@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Libreseerr</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: linear-gradient(180deg, #0b1020, #111827); color: #e5e7eb; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
+    .hero, .panel { background: rgba(17,24,39,0.92); border: 1px solid #243041; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,.25); }
+    .hero { padding: 28px; margin-bottom: 24px; }
+    .hero h1 { margin: 0 0 8px; font-size: 2.4rem; }
+    .hero p { margin: 0; color: #9ca3af; }
+    .grid { display: grid; gap: 20px; grid-template-columns: 1.1fr .9fr; }
+    .panel { padding: 24px; }
+    label { display: block; margin-bottom: 14px; color: #cbd5e1; }
+    input, select, button { width: 100%; margin-top: 8px; padding: 13px 14px; border-radius: 12px; border: 1px solid #334155; background: #0b1220; color: #e5e7eb; box-sizing: border-box; }
+    button { border: none; background: linear-gradient(135deg, #7c3aed, #2563eb); font-weight: 700; cursor: pointer; }
+    .targets { display: grid; gap: 12px; }
+    .target { padding: 16px; border-radius: 14px; background: #0b1220; border: 1px solid #243041; }
+    .muted { color: #94a3b8; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: rgba(124,58,237,.16); color: #c4b5fd; font-size: .82rem; margin-left: 8px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>Libreseerr <span class="pill">Books + Audiobooks</span></h1>
+      <p>Send requests to one or more Readarr instances.</p>
+    </div>
+    <div class="grid">
+      <div class="panel">
+        <h2>New request</h2>
+        <form method="post" action="/request">
+          <label>Title<input name="title" required placeholder="Project Hail Mary"></label>
+          <label>Author<input name="author" required placeholder="Andy Weir"></label>
+          <label>Readarr target
+            <select name="target_name">
+              {% for target in targets %}
+                <option value="{{ target.name }}">{{ target.name }} — {{ target.kind }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit">Send request</button>
+        </form>
+      </div>
+      <div class="panel">
+        <h2>Connected Readarrs</h2>
+        <div class="targets">
+          {% for target in targets %}
+            <div class="target">
+              <strong>{{ target.name }}</strong><br>
+              <span class="muted">{{ target.kind }}</span><br>
+              <span class="muted">{{ target.base_url }}</span>
+            </div>
+          {% else %}
+            <p class="muted">No Readarr targets configured yet.</p>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
