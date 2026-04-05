@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from .config import ReadarrTargetSettings
@@ -13,7 +15,8 @@ class ReadarrClient:
         timeout = httpx.Timeout(20.0, connect=5.0, read=20.0, write=20.0, pool=5.0)
         headers = {'X-Api-Key': self.target.api_key}
         async with httpx.AsyncClient(timeout=timeout) as client:
-            author_resource = await self._lookup_or_create_author(client, headers, author)
+            await self._lookup_or_create_author(client, headers, author)
+            await asyncio.sleep(3)
             book = await self._find_book_by_title(client, headers, title)
             if book is None:
                 raise ValueError(f'No Readarr book found for {title}')
