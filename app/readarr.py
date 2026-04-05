@@ -60,11 +60,26 @@ class ReadarrClient:
 
         root_folder = await self._first_root_folder(client, headers)
         quality_profile = quality_profile_id or await self._quality_profile_id(client, headers)
-        metadata_profile = await self._first_metadata_profile(client, headers)
-        if not root_folder or not quality_profile or not metadata_profile:
-            raise ValueError('Readarr author add failed: missing root folder or profile configuration')
+        if not root_folder or not quality_profile:
+            raise ValueError('Readarr author add failed: missing root folder or quality profile configuration')
 
-        payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile, metadata_profile)
+        payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile)
+        payload['rootFolderPath'] = root_folder
+        payload['qualityProfileId'] = quality_profile
+        payload['monitored'] = True
+        payload['monitorNewItems'] = 'none'
+        payload['addOptions'] = {
+            'monitor': 'all',
+            'booksToMonitor': [],
+            'searchForMissingBooks': False,
+        }
+        metadata_profile = await self._first_metadata_profile(client, headers)
+        if metadata_profile is not None:
+            payload['metadataProfileId'] = metadata_profile
+        if candidate.get('id') is not None:
+            payload['id'] = candidate['id']
+        if candidate.get('foreignAuthorId') is not None:
+            payload['foreignAuthorId'] = candidate['foreignAuthorId']
         create = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=payload)
         if create.status_code >= 400:
             raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
@@ -95,18 +110,14 @@ class ReadarrClient:
             return response.json()
         return None
 
-    def _build_author_payload(self, lookup_author: dict, author_name: str, root_folder: str, quality_profile: int, metadata_profile: int) -> dict:
-        author_id = lookup_author.get('id')
+    def _build_author_payload(self, lookup_author: dict, author_name: str, root_folder: str, quality_profile: int) -> dict:
         path = f"{root_folder.rstrip('/')}/{self._sanitize(author_name)}"
-        payload = {
+        return {
             'authorName': lookup_author.get('authorName') or lookup_author.get('name') or author_name,
-            'foreignAuthorId': lookup_author.get('foreignAuthorId'),
-            'qualityProfileId': quality_profile,
-            'metadataProfileId': metadata_profile,
-            'rootFolderPath': root_folder,
             'path': path,
+            'rootFolderPath': root_folder,
+            'qualityProfileId': quality_profile,
         }
-        return payload
 
     async def _monitor_book(self, client: httpx.AsyncClient, headers: dict[str, str], book_id: int) -> None:
         response = await client.put(f'{self.target.base_url}/api/v1/book/monitor', headers=headers, json={

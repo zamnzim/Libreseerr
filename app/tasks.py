@@ -28,6 +28,10 @@ _order: list[str] = []
 
 
 def create_request_task(client: ReadarrClient, title: str, author: str, target: str, goodreads_id: str | None) -> RequestTask:
+    existing = next((task for task in _tasks.values() if task.title == title and task.author == author and task.target == target and task.status in {'submitted', 'processing', 'success'}), None)
+    if existing is not None:
+        return existing
+
     task_id = str(uuid.uuid4())
     task = RequestTask(id=task_id, status='submitted', message='Request submitted', title=title, author=author, target=target, author_status='processing', book_status='pending', search_status='pending', author_message='Adding author', book_message='Waiting to add requested book', search_message='Waiting to start search')
     _tasks[task_id] = task
