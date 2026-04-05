@@ -24,10 +24,10 @@ class ReadarrClient:
         return 'Requested successfully'
 
     async def _ensure_author(self, client: httpx.AsyncClient, headers: dict[str, str], author_name: str) -> dict:
-        response = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author_name})
-        if response.status_code >= 400:
-            raise ValueError(f'Readarr author lookup failed: {response.text.strip() or response.reason_phrase}')
-        authors = response.json()
+        lookup = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author_name})
+        if lookup.status_code >= 400:
+            raise ValueError(f'Readarr author lookup failed: {lookup.text.strip() or lookup.reason_phrase}')
+        authors = lookup.json()
         if not authors:
             raise ValueError(f'No Readarr author found for {author_name}')
 
@@ -37,10 +37,58 @@ class ReadarrClient:
             if current.status_code == 200:
                 return current.json()
 
-        create_response = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=candidate)
-        if create_response.status_code >= 400:
-            raise ValueError(f'Readarr author add failed: {create_response.text.strip() or create_response.reason_phrase}')
-        return create_response.json()
+        root_folder = await self._first_root_folder(client, headers)
+        quality_profile = await self._first_quality_profile(client, headers)
+        metadata_profile = await self._first_metadata_profile(client, headers)
+        if not root_folder or not quality_profile or not metadata_profile:
+            raise ValueError('Readarr author add failed: missing root folder or profile configuration')
+
+        candidate['monitored'] = True
+        candidate['monitorNewItems'] = candidate.get('monitorNewItems') or 'all'
+        candidate['qualityProfileId'] = quality_profile
+        candidate['metadataProfileId'] = metadata_profile
+        candidate['rootFolderPath'] = root_folder
+        candidate['path'] = root_folder.rstrip('/') + '/' + self._sanitize_path_segment(candidate.get('authorName') or author_name)
+        candidate['addOptions'] = {
+            'monitor': 'all',
+            'monitored': True,
+            'searchForMissingBooks': True,
+        }
+
+        create = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=candidate)
+        if create.status_code >= 400:
+            raise ValueError(f'Readarr author add failed: {create.text.strip() or create.reason_phrase}')
+        return create.json()
+
+    async def _first_root_folder(self, client: httpx.AsyncClient, headers: dict[str, str]) -> str | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/rootfolder', headers=headers)
+        if response.status_code >= 400:
+            return None
+        folders = response.json()
+        return folders[0].get('path') if folders else None
+
+    async def _first_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/qualityprofile', headers=headers)
+        if response.status_code >= 400:
+            return None
+        profiles = response.json()
+        return profiles[0].get('id') if profiles else None
+
+    async def _first_metadata_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/metadataprofile', headers=headers)
+        if response.status_code >= 400:
+            return None
+        profiles = response.json()
+        return profiles[0].get('id') if profiles else None
+
+    def _sanitize_path_segment(self, value: str) -> str:
+        keep = []
+        for ch in value:
+            if ch.isalnum() or ch in {' ', '-', '_', '.', '(' , ')'}:
+                keep.append(ch)
+            else:
+                keep.append('_')
+        return ''.join(keep).strip().replace('  ', ' ')
 
     async def _find_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str) -> dict | None:
         response = await client.get(f'{self.target.base_url}/api/v1/book/lookup', headers=headers, params={'term': title})
