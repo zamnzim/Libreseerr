@@ -81,12 +81,21 @@ class ReadarrClient:
             'addOptions': {
                 'monitor': 'all',
                 'searchForMissingBooks': True,
-                'booksToMonitor': [book.get('title') for book in lookup_author.get('books', []) if book.get('title')] if isinstance(lookup_author.get('books'), list) else [],
+                'booksToMonitor': [
+                    self._best_book_title(lookup_author, author_name)
+                ],
             },
         }
         if author_id is not None:
             payload['id'] = author_id
         return payload
+
+    def _best_book_title(self, lookup_author: dict, author_name: str) -> str:
+        books = lookup_author.get('books') or []
+        for book in books:
+            if book.get('title'):
+                return book['title']
+        return author_name
 
     async def _lookup_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str) -> dict:
         lookup = await client.get(f'{self.target.base_url}/api/v1/book/lookup', headers=headers, params={'term': title})
@@ -126,11 +135,11 @@ class ReadarrClient:
             'authorId': author.get('id'),
             'foreignBookId': goodreads_id or book.get('foreignBookId'),
             'foreignEditionId': edition.get('foreignEditionId') or book.get('foreignEditionId'),
-            'monitored': True,
+            'monitored': False,
             'anyEditionOk': False,
             'addOptions': {
                 'addType': 'automatic',
-                'searchForNewBook': True,
+                'searchForNewBook': False,
             },
             'editions': [self._normalize_edition(book, edition)],
         }
@@ -151,7 +160,7 @@ class ReadarrClient:
             'images': edition.get('images') or book.get('images') or [],
             'links': edition.get('links') or book.get('links') or [],
             'ratings': edition.get('ratings') or book.get('ratings') or {'votes': 0, 'value': 0},
-            'monitored': True,
+            'monitored': False,
             'manualAdd': True,
         }
         return normalized

@@ -80,7 +80,11 @@
               </div>
               <div style="margin-top:8px">
                 <span class="status {{ item.book_status }}">book {{ item.book_status }}</span><br>
-                <span class="muted">{{ item.book_message or item.message }}</span>
+                <span class="muted">{{ item.book_message }}</span>
+              </div>
+              <div style="margin-top:8px">
+                <span class="status {{ item.search_status }}">search {{ item.search_status }}</span><br>
+                <span class="muted">{{ item.search_message }}</span>
               </div>
               {% if item.status == 'error' %}
                 <form method="post" action="/request/{{ item.id }}/retry">
