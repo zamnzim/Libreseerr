@@ -20,7 +20,7 @@ class ReadarrClient:
             book_id = await self._add_requested_book(client, headers, author_resource, book_resource, goodreads_id)
             if book_id is not None and author_resource.get('id') is not None:
                 await self._search_book(client, headers, author_resource['id'], book_id)
-        return 'Author added, book added, search started'
+        return 'Author added, requested book added, search started'
 
     async def _search_book(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int, book_id: int) -> None:
         response = await client.post(f'{self.target.base_url}/api/v1/command', headers=headers, json={
@@ -68,14 +68,15 @@ class ReadarrClient:
             'authorName': lookup_author.get('authorName') or lookup_author.get('name') or author_name,
             'foreignAuthorId': lookup_author.get('foreignAuthorId'),
             'monitored': True,
-            'monitorNewItems': 'all',
+            'monitorNewItems': 'none',
             'qualityProfileId': quality_profile,
             'metadataProfileId': metadata_profile,
             'rootFolderPath': root_folder,
             'path': path,
             'addOptions': {
                 'monitor': 'all',
-                'searchForMissingBooks': True,
+                'booksToMonitor': [],
+                'searchForMissingBooks': False,
             },
         }
         if author_id is not None:
