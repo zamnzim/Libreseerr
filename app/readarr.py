@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import httpx
 
 from .config import ReadarrTargetSettings
@@ -16,22 +14,11 @@ class ReadarrClient:
         headers = {'X-Api-Key': self.target.api_key}
         async with httpx.AsyncClient(timeout=timeout) as client:
             await self._lookup_or_create_author(client, headers, author)
-            await asyncio.sleep(3)
             book = await self._find_book_by_title(client, headers, title)
             if book is None:
                 raise ValueError(f'No Readarr book found for {title}')
             await self._monitor_requested_book(client, headers, book['id'])
-            await self._search_requested_book(client, headers, book['id'])
-        return 'Author added, requested book monitored and searched'
-
-    async def _search_requested_book(self, client: httpx.AsyncClient, headers: dict[str, str], book_id: int) -> None:
-        response = await client.post(f'{self.target.base_url}/api/v1/command', headers=headers, json={
-            'name': 'BookSearch',
-            'bookIds': [book_id],
-        })
-        if response.status_code >= 400:
-            raise ValueError(f'Readarr book search failed: {self._format_error(response)}')
-
+        return 'Author added, requested book monitored'
 
     async def _lookup_or_create_author(self, client: httpx.AsyncClient, headers: dict[str, str], author_name: str) -> dict:
         lookup = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author_name})
@@ -45,7 +32,7 @@ class ReadarrClient:
         if current is not None:
             return current
         root_folder = await self._first_root_folder(client, headers)
-        quality_profile = await self._first_quality_profile(client, headers)
+        quality_profile = await self._quality_profile_id(client, headers)
         metadata_profile = await self._first_metadata_profile(client, headers)
         if not root_folder or not quality_profile or not metadata_profile:
             raise ValueError('Readarr author add failed: missing root folder or profile configuration')
@@ -114,11 +101,15 @@ class ReadarrClient:
         folders = response.json()
         return folders[0].get('path') if folders else None
 
-    async def _first_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
+    async def _quality_profile_id(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
         response = await client.get(f'{self.target.base_url}/api/v1/qualityprofile', headers=headers)
         if response.status_code >= 400:
             return None
         profiles = response.json()
+        target_name = 'Spoken' if self.target.is_audio else 'eBook'
+        for profile in profiles:
+            if profile.get('name') == target_name:
+                return profile.get('id')
         return profiles[0].get('id') if profiles else None
 
     async def _first_metadata_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
