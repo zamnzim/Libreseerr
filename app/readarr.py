@@ -19,6 +19,15 @@ class ReadarrClient:
             await self._search_book(client, headers, book_resource['id'])
         return 'Author added, requested book monitored and searched'
 
+    async def list_quality_profiles(self) -> list[dict]:
+        timeout = httpx.Timeout(20.0, connect=5.0, read=20.0, write=20.0, pool=5.0)
+        headers = {'X-Api-Key': self.target.api_key}
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f'{self.target.base_url}/api/v1/qualityprofile', headers=headers)
+            if response.status_code >= 400:
+                raise ValueError(f'Readarr quality profile lookup failed: {self._format_error(response)}')
+            return response.json()
+
     async def _ensure_author(self, client: httpx.AsyncClient, headers: dict[str, str], author_name: str) -> dict:
         lookup = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author_name})
         if lookup.status_code >= 400:
@@ -120,10 +129,13 @@ class ReadarrClient:
             return None
         profiles = response.json()
         target_name = 'Spoken' if self.target.kind == 'audio' else 'eBook'
+        if self.target.kind == 'audio':
+            # audiobook servers should always use the Spoken profile
+            pass
         for profile in profiles:
             if profile.get('name') == target_name:
                 return profile.get('id')
-        return None
+        raise ValueError(f'Readarr quality profile not found: {target_name}')
 
     async def _first_metadata_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> int | None:
         response = await client.get(f'{self.target.base_url}/api/v1/metadataprofile', headers=headers)
