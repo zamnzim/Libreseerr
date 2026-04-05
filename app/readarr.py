@@ -12,37 +12,12 @@ class ReadarrClient:
     async def request_book(self, title: str, author: str, goodreads_id: str | None = None) -> str:
         headers = {'X-Api-Key': self.target.api_key}
         async with httpx.AsyncClient(timeout=30.0) as client:
-            author_search = await client.get(f'{self.target.base_url}/api/v1/author', headers=headers, params={'term': author})
-            if author_search.status_code >= 400:
-                raise ValueError(f'Readarr author search failed: {author_search.text.strip() or author_search.reason_phrase}')
-            authors = author_search.json()
-            if not authors:
-                raise ValueError(f'No Readarr author found for {author}')
-            author_resource = authors[0]
-
-            book_search = await client.get(f'{self.target.base_url}/api/v1/search', headers=headers, params={'term': title})
-            if book_search.status_code >= 400:
-                raise ValueError(f'Readarr book search failed: {book_search.text.strip() or book_search.reason_phrase}')
-            books = book_search.json()
-            if not books:
+            author_resource = await self._find_author(client, headers, author)
+            book_resource = await self._find_book(client, headers, title)
+            if not book_resource:
                 raise ValueError(f'No Readarr book found for {title}')
 
-            selected = self._select_candidate(books, title)
-            payload = {
-                'title': selected.get('title', title),
-                'author': author_resource,
-                'foreignBookId': goodreads_id or selected.get('foreignBookId'),
-                'edition': self._first_edition(selected),
-                'monitored': True,
-                'searchForNewBook': True,
-                'addOptions': {
-                    'searchForBook': True,
-                },
-            }
-
-            if payload['edition'] is None:
-                payload.pop('edition')
-
+            payload = self._build_payload(title, author_resource, book_resource, goodreads_id)
             response = await client.post(f'{self.target.base_url}/api/v1/book', headers=headers, json=payload)
 
         if response.status_code >= 400:
@@ -51,13 +26,76 @@ class ReadarrClient:
 
         return 'Requested successfully'
 
-    def _select_candidate(self, books: list[dict], title: str) -> dict:
-        normalized = title.casefold()
-        for book in books:
-            if book.get('title', '').casefold() == normalized:
-                return book
-        return books[0]
+    async def _find_author(self, client: httpx.AsyncClient, headers: dict[str, str], author: str) -> dict:
+        response = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author})
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr author lookup failed: {response.text.strip() or response.reason_phrase}')
+        authors = response.json()
+        if not authors:
+            raise ValueError(f'No Readarr author found for {author}')
+        return authors[0]
 
-    def _first_edition(self, book: dict) -> dict | None:
-        editions = book.get('editions') or []
-        return editions[0] if editions else None
+    async def _find_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str) -> dict | None:
+        response = await client.get(f'{self.target.base_url}/api/v1/book/lookup', headers=headers, params={'term': title})
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr book lookup failed: {response.text.strip() or response.reason_phrase}')
+        books = response.json()
+        return books[0] if books else None
+
+    def _build_payload(self, title: str, author_resource: dict, book_resource: dict, goodreads_id: str | None) -> dict:
+        payload = {
+            'title': book_resource.get('title') or title,
+            'author': author_resource,
+            'authorId': author_resource.get('id'),
+            'foreignBookId': goodreads_id or book_resource.get('foreignBookId'),
+            'foreignEditionId': book_resource.get('foreignEditionId'),
+            'monitored': True,
+            'anyEditionOk': True,
+            'addOptions': {
+                'addType': 'automatic',
+                'searchForNewBook': True,
+            },
+            'editions': self._editions_from_book(book_resource),
+        }
+        return {k: v for k, v in payload.items() if v is not None}
+
+    def _editions_from_book(self, book_resource: dict) -> list[dict]:
+        editions = book_resource.get('editions') or []
+        if editions:
+            return [
+                {
+                    'id': edition.get('id'),
+                    'bookId': edition.get('bookId'),
+                    'foreignEditionId': edition.get('foreignEditionId'),
+                    'title': edition.get('title'),
+                    'language': edition.get('language'),
+                    'overview': edition.get('overview'),
+                    'format': edition.get('format'),
+                    'isEbook': edition.get('isEbook', False),
+                    'disambiguation': edition.get('disambiguation'),
+                    'publisher': edition.get('publisher'),
+                    'pageCount': edition.get('pageCount', 0),
+                    'releaseDate': edition.get('releaseDate'),
+                    'images': edition.get('images') or [],
+                    'links': edition.get('links') or [],
+                    'ratings': edition.get('ratings') or {'votes': 0, 'value': 0},
+                    'monitored': edition.get('monitored', True),
+                    'manualAdd': edition.get('manualAdd', True),
+                }
+                for edition in editions
+            ]
+
+        return [
+            {
+                'title': book_resource.get('title') or 'Unknown title',
+                'bookId': book_resource.get('id'),
+                'foreignEditionId': book_resource.get('foreignEditionId') or book_resource.get('foreignBookId') or book_resource.get('id'),
+                'isEbook': False,
+                'monitored': True,
+                'manualAdd': True,
+                'pageCount': book_resource.get('pageCount', 0),
+                'images': book_resource.get('images') or [],
+                'links': book_resource.get('links') or [],
+                'ratings': book_resource.get('ratings') or {'votes': 0, 'value': 0},
+            }
+        ]
