@@ -9,7 +9,7 @@ class ReadarrClient:
     def __init__(self, target: ReadarrTargetSettings):
         self.target = target
 
-    async def request_book(self, title: str, author: str, goodreads_id: str | None = None) -> str:
+    async def request_book(self, title: str, author: str, goodreads_id: str | None = None, task_id: str | None = None) -> str:
         timeout = httpx.Timeout(20.0, connect=5.0, read=20.0, write=20.0, pool=5.0)
         headers = {'X-Api-Key': self.target.api_key}
         async with httpx.AsyncClient(timeout=timeout) as client:
