@@ -64,22 +64,6 @@ class ReadarrClient:
             raise ValueError('Readarr author add failed: missing root folder or quality profile configuration')
 
         payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile)
-        payload['rootFolderPath'] = root_folder
-        payload['qualityProfileId'] = quality_profile
-        payload['monitored'] = True
-        payload['monitorNewItems'] = 'none'
-        payload['addOptions'] = {
-            'monitor': 'all',
-            'booksToMonitor': [],
-            'searchForMissingBooks': False,
-        }
-        metadata_profile = await self._first_metadata_profile(client, headers)
-        if metadata_profile is not None:
-            payload['metadataProfileId'] = metadata_profile
-        if candidate.get('id') is not None:
-            payload['id'] = candidate['id']
-        if candidate.get('foreignAuthorId') is not None:
-            payload['foreignAuthorId'] = candidate['foreignAuthorId']
         create = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=payload)
         if create.status_code >= 400:
             raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
