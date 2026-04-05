@@ -106,7 +106,7 @@ class ReadarrClient:
         if response.status_code >= 400:
             return None
         profiles = response.json()
-        target_name = 'Spoken' if self.target.is_audio else 'eBook'
+        target_name = 'Spoken' if self.target.kind == 'audio' else 'eBook'
         for profile in profiles:
             if profile.get('name') == target_name:
                 return profile.get('id')
