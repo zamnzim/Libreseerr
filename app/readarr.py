@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import httpx
 
 from .config import ReadarrTargetSettings
@@ -16,12 +14,20 @@ class ReadarrClient:
         headers = {'X-Api-Key': self.target.api_key}
         async with httpx.AsyncClient(timeout=timeout) as client:
             await self._lookup_or_create_author(client, headers, author)
-            await asyncio.sleep(3)
             book = await self._find_book_by_title(client, headers, title)
             if book is None:
                 raise ValueError(f'No Readarr book found for {title}')
             await self._monitor_requested_book(client, headers, book['id'])
-        return 'Author added, requested book monitored'
+            await self._search_requested_book(client, headers, book['id'])
+        return 'Author added, requested book monitored and searched'
+
+    async def _search_requested_book(self, client: httpx.AsyncClient, headers: dict[str, str], book_id: int) -> None:
+        response = await client.post(f'{self.target.base_url}/api/v1/command', headers=headers, json={
+            'name': 'RescanBook',
+            'bookId': book_id,
+        })
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr book search failed: {self._format_error(response)}')
 
     async def _lookup_or_create_author(self, client: httpx.AsyncClient, headers: dict[str, str], author_name: str) -> dict:
         lookup = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author_name})
