@@ -66,12 +66,38 @@ class ReadarrClient:
         if quality_profile_id is None:
             raise ValueError('Readarr author add failed: missing quality profile')
 
-        payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile_id)
+        payload = self._build_author_payload(candidate, author_name, root_folder)
         create = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=payload)
         if create.status_code >= 400:
             print(f'Readarr author add failed for {author_name}: {self._format_error(create)}')
             raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
-        return create.json()
+        author = create.json()
+        if author.get('id') is not None:
+            await self._update_author_quality_profile(client, headers, author['id'], quality_profile_id)
+        return author
+
+    async def _update_author_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int, quality_profile_id: int) -> None:
+        response = await client.put(f'{self.target.base_url}/api/v1/author/{author_id}', headers=headers, json={'qualityProfileId': quality_profile_id})
+        if response.status_code >= 400:
+            print(f'Readarr author quality profile update failed for {author_id}: {self._format_error(response)}')
+            raise ValueError(f'Readarr author quality profile update failed: {self._format_error(response)}')
+
+    async def _ensure_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str, author_resource: dict) -> dict:
+        lookup = await client.get(f'{self.target.base_url}/api/v1/book/lookup', headers=headers, params={'term': title})
+        if lookup.status_code >= 400:
+            raise ValueError(f'Readarr book lookup failed: {self._format_error(lookup)}')
+        books = lookup.json()
+        if not books:
+            raise ValueError(f'No Readarr book found for {title}')
+
+        normalized = title.casefold()
+        for book in books:
+            if book.get('title', '').casefold() == normalized:
+                return book
+        for book in books:
+            if normalized in book.get('title', '').casefold():
+                return book
+        return books[0]
 
     async def _update_author_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int, quality_profile_id: int) -> None:
         response = await client.put(f'{self.target.base_url}/api/v1/author/{author_id}', headers=headers, json={

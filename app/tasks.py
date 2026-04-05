@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 import uuid
 from dataclasses import dataclass
 
@@ -21,6 +22,7 @@ class RequestTask:
     author_message: str = ''
     book_message: str = ''
     search_message: str = ''
+    error_detail: str = ''
 
 
 _tasks: dict[str, RequestTask] = {}
@@ -33,18 +35,58 @@ def create_request_task(client: ReadarrClient, title: str, author: str, target: 
         return existing
 
     task_id = str(uuid.uuid4())
-    task = RequestTask(id=task_id, status='submitted', message='Request submitted', title=title, author=author, target=target, author_status='processing', book_status='pending', search_status='pending', author_message='Adding author', book_message='Waiting to add requested book', search_message='Waiting to start search')
+    task = RequestTask(
+        id=task_id,
+        status='submitted',
+        message='Request submitted',
+        title=title,
+        author=author,
+        target=target,
+        author_status='processing',
+        book_status='pending',
+        search_status='pending',
+        author_message='Adding author',
+        book_message='Waiting to add requested book',
+        search_message='Waiting to start search',
+    )
     _tasks[task_id] = task
     _order.insert(0, task_id)
     del _order[20:]
 
     async def runner() -> None:
         try:
-            _tasks[task_id] = RequestTask(id=task_id, status='processing', message='Submitting to Readarr', title=title, author=author, target=target, author_status='processing', book_status='pending', search_status='pending', author_message='Adding author', book_message='Waiting to add requested book', search_message='Waiting to start search')
+            _tasks[task_id] = RequestTask(
+                id=task_id,
+                status='processing',
+                message='Submitting to Readarr',
+                title=title,
+                author=author,
+                target=target,
+                author_status='processing',
+                book_status='pending',
+                search_status='pending',
+                author_message='Adding author',
+                book_message='Waiting to add requested book',
+                search_message='Waiting to start search',
+            )
             result = await client.request_book(title=title, author=author, goodreads_id=goodreads_id, task_id=task_id)
-            _tasks[task_id] = RequestTask(id=task_id, status='success', message=result, title=title, author=author, target=target, author_status='success', book_status='success', search_status='success', author_message='Author added', book_message='Requested book added', search_message='Search started')
+            _tasks[task_id] = RequestTask(
+                id=task_id,
+                status='success',
+                message=result,
+                title=title,
+                author=author,
+                target=target,
+                author_status='success',
+                book_status='success',
+                search_status='success',
+                author_message='Author added',
+                book_message='Requested book added',
+                search_message='Search started',
+            )
         except Exception as exc:
             msg = f'{type(exc).__name__}: {exc}'
+            detail = traceback.format_exc()
             current = _tasks.get(task_id)
             _tasks[task_id] = RequestTask(
                 id=task_id,
@@ -59,6 +101,7 @@ def create_request_task(client: ReadarrClient, title: str, author: str, target: 
                 author_message='Author added' if current and current.author_status == 'success' else 'Author failed',
                 book_message='Requested book failed',
                 search_message='Search not started',
+                error_detail=detail,
             )
 
     asyncio.create_task(runner())
@@ -104,10 +147,6 @@ def retry_request_task(client: ReadarrClient, task_id: str) -> RequestTask:
     if previous is None:
         raise KeyError(task_id)
     return create_request_task(client, previous.title, previous.author, previous.target, None)
-
-
-def get_request_task(task_id: str) -> RequestTask | None:
-    return _tasks.get(task_id)
 
 
 def list_request_tasks() -> list[RequestTask]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -9,8 +11,23 @@ from .metadata import get_book, search_books
 from .readarr import ReadarrClient
 from .tasks import create_request_task, get_request_task, list_request_tasks, retry_request_task, update_quality_profile_for_request
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title='Libreseerr')
 templates = Jinja2Templates(directory='app/templates')
+
+
+def _log_exception(prefix: str, exc: Exception) -> None:
+    logger.exception('%s: %s', prefix, exc)
+
+
+async def _guarded(call, prefix: str):
+    try:
+        return await call
+    except Exception as exc:
+        _log_exception(prefix, exc)
+        raise
 
 
 @app.get('/health')
@@ -24,16 +41,17 @@ async def home(request: Request, q: str = ''):
     results = []
     if q:
         try:
-            results = await search_books(q)
+            results = await _guarded(search_books(q), 'Search failed')
         except Exception:
             results = []
+            logger.exception('Search failed for query %s', q)
     return templates.TemplateResponse('index.html', {'request': request, 'settings': settings, 'targets': settings.targets(), 'query': q, 'results': results, 'history': list_request_tasks()})
 
 
 @app.get('/book/{source}/{book_id}', response_class=HTMLResponse)
 async def book_detail(request: Request, source: str, book_id: str):
     settings = get_settings()
-    book = await get_book(book_id, source=source)
+    book = await _guarded(get_book(book_id, source=source), f'Book lookup failed for {source}/{book_id}')
     if book is None:
         raise HTTPException(status_code=404, detail='Book not found')
     quality_profiles = []
@@ -51,7 +69,7 @@ async def readarr_quality_profiles(target_name: str):
     target = next((t for t in settings.targets() if t.name == target_name), None)
     if target is None:
         raise HTTPException(status_code=404, detail='Readarr target not found')
-    return await ReadarrClient(target).list_quality_profiles()
+    return await _guarded(ReadarrClient(target).list_quality_profiles(), f'Quality profile lookup failed for {target.name}')
 
 
 @app.post('/request')
@@ -80,46 +98,6 @@ async def request_status_json(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail='Request not found')
     return {'task_id': task.id, 'status': task.status, 'message': task.message, 'author_status': task.author_status, 'book_status': task.book_status, 'search_status': task.search_status, 'author_message': task.author_message, 'book_message': task.book_message, 'search_message': task.search_message}
-
-
-@app.get('/request/{task_id}/status')
-async def request_status_json(task_id: str):
-    task = get_request_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail='Request not found')
-    return {'task_id': task.id, 'status': task.status, 'message': task.message, 'author_status': task.author_status, 'book_status': task.book_status, 'search_status': task.search_status, 'author_message': task.author_message, 'book_message': task.book_message, 'search_message': task.search_message}
-
-
-@app.post('/request/{task_id}/quality-profile')
-async def set_request_quality_profile(task_id: str, quality_profile_id: int = Form(...)):
-    task = update_quality_profile_for_request(task_id, quality_profile_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail='Request not found')
-    return {'task_id': task.id, 'quality_profile_id': quality_profile_id}
-
-
-@app.get('/book/{source}/{book_id}', response_class=HTMLResponse)
-async def book_detail(request: Request, source: str, book_id: str):
-    settings = get_settings()
-    book = await get_book(book_id, source=source)
-    if book is None:
-        raise HTTPException(status_code=404, detail='Book not found')
-    quality_profiles = []
-    for target in settings.targets():
-        try:
-            quality_profiles.extend(await ReadarrClient(target).list_quality_profiles())
-        except Exception:
-            continue
-    return templates.TemplateResponse('book.html', {'request': request, 'settings': settings, 'targets': settings.targets(), 'book': book, 'quality_profiles': quality_profiles})
-
-
-@app.get('/readarr/{target_name}/quality-profiles')
-async def readarr_quality_profiles(target_name: str):
-    settings = get_settings()
-    target = next((t for t in settings.targets() if t.name == target_name), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail='Readarr target not found')
-    return await ReadarrClient(target).list_quality_profiles()
 
 
 @app.post('/request/{task_id}/retry')

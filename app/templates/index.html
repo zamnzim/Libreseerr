@@ -119,11 +119,16 @@
                   status.className = 'pill submitted';
                   const body = new FormData(form);
                   const res = await fetch('/request', { method: 'POST', body });
-                  const data = await res.json();
-                  status.textContent = data.message;
-                  const historyRefresh = await fetch('/');
-                  if (historyRefresh.ok) {
-                    window.location.reload();
+                  if (!res.ok) {
+                    status.textContent = 'Request failed';
+                    status.className = 'pill error';
+                    return;
+                  }
+                  status.textContent = 'Request queued';
+                  status.className = 'pill success';
+                  const text = await res.text();
+                  if (text) {
+                    window.location.hash = 'request-status';
                   }
                 });
               });
@@ -155,9 +160,13 @@
                 <span class="muted">{{ item.search_message }}</span>
               </div>
               {% if item.status == 'error' %}
-                <form method="post" action="/request/{{ item.id }}/retry">
-                  <button class="retry" type="submit">Retry</button>
-                </form>
+                <details style="margin-top:10px">
+                  <summary class="retry">Show more</summary>
+                  <div class="muted" style="margin-top:10px; white-space: pre-wrap;">{{ item.error_detail }}</div>
+                  <form method="post" action="/request/{{ item.id }}/retry" style="margin-top:10px">
+                    <button class="retry" type="submit">Retry</button>
+                  </form>
+                </details>
               {% endif %}
             </div>
           {% else %}
