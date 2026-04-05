@@ -43,7 +43,6 @@ class ReadarrClient:
         return books[0] if books else None
 
     def _build_payload(self, title: str, author_resource: dict, book_resource: dict, goodreads_id: str | None) -> dict:
-        editions = self._editions_from_book(book_resource)
         payload = {
             'title': book_resource.get('title') or title,
             'author': author_resource,
@@ -56,7 +55,7 @@ class ReadarrClient:
                 'addType': 'automatic',
                 'searchForNewBook': False,
             },
-            'editions': editions,
+            'editions': self._editions_from_book(book_resource),
         }
         return {k: v for k, v in payload.items() if v is not None}
 
@@ -85,13 +84,14 @@ class ReadarrClient:
                 }
                 if edition.get('bookId') is not None:
                     item['bookId'] = int(edition['bookId'])
+                else:
+                    item.pop('bookId', None)
                 output.append(item)
             return output
 
         return [
             {
                 'title': book_resource.get('title') or 'Unknown title',
-                'bookId': int(book_resource['id']) if book_resource.get('id') is not None else None,
                 'foreignEditionId': book_resource.get('foreignEditionId') or book_resource.get('foreignBookId') or str(book_resource.get('id') or ''),
                 'isEbook': False,
                 'monitored': True,
