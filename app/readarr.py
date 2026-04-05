@@ -11,7 +11,7 @@ class ReadarrClient:
 
     async def request_book(self, title: str, author: str, goodreads_id: str | None = None) -> str:
         headers = {'X-Api-Key': self.target.api_key}
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             author_resource = await self._find_author(client, headers, author)
             book_resource = await self._find_book(client, headers, title)
             if not book_resource:
@@ -53,7 +53,7 @@ class ReadarrClient:
             'anyEditionOk': True,
             'addOptions': {
                 'addType': 'automatic',
-                'searchForNewBook': True,
+                'searchForNewBook': False,
             },
             'editions': self._editions_from_book(book_resource),
         }
