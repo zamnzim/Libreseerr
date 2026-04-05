@@ -81,7 +81,7 @@ class ReadarrClient:
             'addOptions': {
                 'monitor': 'all',
                 'searchForMissingBooks': True,
-                'booksToMonitor': [],
+                'booksToMonitor': [book.get('title') for book in lookup_author.get('books', []) if book.get('title')] if isinstance(lookup_author.get('books'), list) else [],
             },
         }
         if author_id is not None:
@@ -154,8 +154,6 @@ class ReadarrClient:
             'monitored': True,
             'manualAdd': True,
         }
-        if edition.get('id') is not None:
-            normalized['id'] = int(edition['id'])
         return normalized
 
     def _sanitize(self, value: str) -> str:
