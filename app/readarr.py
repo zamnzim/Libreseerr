@@ -9,12 +9,14 @@ class ReadarrClient:
     def __init__(self, target: ReadarrTargetSettings):
         self.target = target
 
-    async def search_or_add(self, title: str, author: str) -> str:
+    async def request_book(self, title: str, author: str, goodreads_id: str | None = None) -> str:
         payload = {
             'title': title,
             'author': author,
             'searchForBook': True,
         }
+        if goodreads_id:
+            payload['foreignBookId'] = goodreads_id
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f'{self.target.base_url}/api/v1/book',

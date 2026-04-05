@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ book.title }} - Libreseerr</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: linear-gradient(180deg, #0b1020, #111827); color: #e5e7eb; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
+    .panel { background: rgba(17,24,39,0.92); border: 1px solid #243041; border-radius: 20px; padding: 24px; }
+    .detail { display: grid; grid-template-columns: 220px 1fr; gap: 24px; }
+    img { width: 220px; height: 330px; object-fit: cover; border-radius: 18px; background: #111827; }
+    .muted { color: #94a3b8; }
+    textarea, select, button { width: 100%; box-sizing: border-box; margin-top: 8px; margin-bottom: 14px; padding: 13px 14px; border-radius: 12px; border: 1px solid #334155; background: #0b1220; color: #e5e7eb; }
+    button { border: none; background: linear-gradient(135deg, #7c3aed, #2563eb); font-weight: 700; cursor: pointer; }
+    textarea { min-height: 170px; resize: vertical; }
+    a { color: #c4b5fd; text-decoration: none; }
+    @media (max-width: 800px) { .detail { grid-template-columns: 1fr; } img { width: 100%; height: auto; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel">
+      <p><a href="/">← Back</a></p>
+      <div class="detail">
+        {% if book.thumbnail %}<img src="{{ book.thumbnail }}" alt="{{ book.title }} cover">{% endif %}
+        <div>
+          <h1>{{ book.title }}</h1>
+          <p class="muted">{{ book.author }}</p>
+          <h3>Blurb</h3>
+          <p>{{ book.description }}</p>
+          <h3>Download to Readarr</h3>
+          <form method="post" action="/request">
+            <input type="hidden" name="title" value="{{ book.title }}">
+            <input type="hidden" name="author" value="{{ book.author }}">
+            <input type="hidden" name="goodreads_id" value="{{ book.isbn or book.id }}">
+            <select name="target_name">
+              {% for target in targets %}
+                <option value="{{ target.name }}">{{ target.name }} — {{ target.kind }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit">Download</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
