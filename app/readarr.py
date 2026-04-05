@@ -69,6 +69,7 @@ class ReadarrClient:
         payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile_id)
         create = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=payload)
         if create.status_code >= 400:
+            print(f'Readarr author add failed for {author_name}: {self._format_error(create)}')
             raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
         return create.json()
 
@@ -77,6 +78,7 @@ class ReadarrClient:
             'qualityProfileId': quality_profile_id,
         })
         if response.status_code >= 400:
+            print(f'Readarr author quality profile update failed for {author_id}: {self._format_error(response)}')
             raise ValueError(f'Readarr author quality profile update failed: {self._format_error(response)}')
 
     async def _ensure_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str, author_resource: dict) -> dict:
