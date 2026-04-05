@@ -54,14 +54,29 @@
         <h2>Search results</h2>
         <div class="results">
           {% for book in results %}
-            <a class="result" href="/book/{{ book.source }}/{{ book.id }}">
+            <div class="result">
               {% if book.thumbnail %}<img src="{{ book.thumbnail }}" alt="{{ book.title }} cover">{% else %}<img alt="">{% endif %}
               <div>
                 <strong>{{ book.title }}</strong><br>
                 <span class="muted">{{ book.author }}</span><br>
                 <span class="muted">{{ book.description[:180] }}{% if book.description|length > 180 %}...{% endif %}</span>
+                <form method="post" action="/request" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                  <input type="hidden" name="title" value="{{ book.title }}">
+                  <input type="hidden" name="author" value="{{ book.author }}">
+                  <select name="target_name" required>
+                    {% for target in targets %}
+                      <option value="{{ target.name }}">{{ target.name }}</option>
+                    {% endfor %}
+                  </select>
+                  <select name="quality_profile_id" required>
+                    {% for profile in quality_profiles %}
+                      <option value="{{ profile.id }}">{{ profile.name }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit">Download</button>
+                </form>
               </div>
-            </a>
+            </div>
           {% else %}
             <p class="muted">Search for a book to see results.</p>
           {% endfor %}

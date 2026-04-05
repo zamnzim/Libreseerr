@@ -28,6 +28,13 @@ class ReadarrClient:
                 raise ValueError(f'Readarr quality profile lookup failed: {self._format_error(response)}')
             return response.json()
 
+    async def quality_profile_id_for_name(self, name: str) -> int:
+        profiles = await self.list_quality_profiles()
+        for profile in profiles:
+            if profile.get('name') == name:
+                return profile['id']
+        raise ValueError(f'Readarr quality profile not found: {name}')
+
     async def _ensure_author(self, client: httpx.AsyncClient, headers: dict[str, str], author_name: str) -> dict:
         lookup = await client.get(f'{self.target.base_url}/api/v1/author/lookup', headers=headers, params={'term': author_name})
         if lookup.status_code >= 400:
