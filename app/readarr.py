@@ -14,6 +14,8 @@ class ReadarrClient:
         headers = {'X-Api-Key': self.target.api_key}
         async with httpx.AsyncClient(timeout=timeout) as client:
             author_resource = await self._ensure_author(client, headers, author, quality_profile_id)
+            if quality_profile_id is not None and author_resource.get('id') is not None:
+                await self._update_author_quality_profile(client, headers, author_resource['id'], quality_profile_id)
             book_resource = await self._ensure_book(client, headers, title, author_resource)
             await self._monitor_book(client, headers, book_resource['id'])
             await self._search_book(client, headers, book_resource['id'])
@@ -59,15 +61,23 @@ class ReadarrClient:
             return current
 
         root_folder = await self._first_root_folder(client, headers)
-        quality_profile = quality_profile_id or await self._quality_profile_id(client, headers)
-        if not root_folder or not quality_profile:
-            raise ValueError('Readarr author add failed: missing root folder or quality profile configuration')
+        if not root_folder:
+            raise ValueError('Readarr author add failed: missing root folder')
+        if quality_profile_id is None:
+            raise ValueError('Readarr author add failed: missing quality profile')
 
-        payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile)
+        payload = self._build_author_payload(candidate, author_name, root_folder, quality_profile_id)
         create = await client.post(f'{self.target.base_url}/api/v1/author', headers=headers, json=payload)
         if create.status_code >= 400:
             raise ValueError(f'Readarr author add failed: {self._format_error(create)}')
         return create.json()
+
+    async def _update_author_quality_profile(self, client: httpx.AsyncClient, headers: dict[str, str], author_id: int, quality_profile_id: int) -> None:
+        response = await client.put(f'{self.target.base_url}/api/v1/author/{author_id}', headers=headers, json={
+            'qualityProfileId': quality_profile_id,
+        })
+        if response.status_code >= 400:
+            raise ValueError(f'Readarr author quality profile update failed: {self._format_error(response)}')
 
     async def _ensure_book(self, client: httpx.AsyncClient, headers: dict[str, str], title: str, author_resource: dict) -> dict:
         lookup = await client.get(f'{self.target.base_url}/api/v1/book/lookup', headers=headers, params={'term': title})
