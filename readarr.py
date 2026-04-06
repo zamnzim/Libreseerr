@@ -60,27 +60,48 @@ class ReadarrClient:
         """Add a book to Readarr for downloading."""
         author_data = book_data.get("author", {})
         author_name = author_data.get("authorName", "Unknown")
+        foreign_author_id = author_data.get("foreignAuthorId", "")
 
-        # First, try to find the author already in Readarr
+        # Check if the author already exists in Readarr
         existing_authors = self.session.get(
             self._url("/author"), timeout=15
         ).json()
-        added_author = next(
-            (a for a in existing_authors if a.get("authorName", "").lower() == author_name.lower()),
-            None,
-        )
+        added_author = None
+
+        if foreign_author_id:
+            # Match by foreignAuthorId (reliable — from book lookup result)
+            added_author = next(
+                (a for a in existing_authors if a.get("foreignAuthorId") == foreign_author_id),
+                None,
+            )
+        if not added_author:
+            # Match by name as fallback
+            added_author = next(
+                (a for a in existing_authors if a.get("authorName", "").lower() == author_name.lower()),
+                None,
+            )
 
         if not added_author:
-            # Author not in Readarr yet — look them up via metadata provider
+            # Need to add the author — look up via metadata provider
+            lookup_term = foreign_author_id or author_name
             author_lookup = self.session.get(
-                self._url("/author/lookup"), params={"term": author_name}, timeout=15
+                self._url("/author/lookup"), params={"term": lookup_term}, timeout=15
             )
             if author_lookup.ok and author_lookup.json():
-                # Use the first lookup result which has proper foreignAuthorId
-                lookup_author = author_lookup.json()[0]
-                author = {
-                    "authorName": lookup_author.get("authorName", author_name),
-                    "foreignAuthorId": lookup_author.get("foreignAuthorId", ""),
+                # Find best match from lookup results
+                lookup_results = author_lookup.json()
+                if foreign_author_id:
+                    # Prefer exact foreignAuthorId match
+                    best = next(
+                        (a for a in lookup_results if a.get("foreignAuthorId") == foreign_author_id),
+                        None,
+                    ) or lookup_results[0]
+                else:
+                    # Use first result — should be most relevant for name searches
+                    best = lookup_results[0]
+                author_payload = {
+                    "authorName": best.get("authorName", author_name),
+                    "foreignAuthorId": best.get("foreignAuthorId", foreign_author_id),
                     "qualityProfileId": quality_profile_id,
                     "metadataProfileId": 1,
                     "rootFolderPath": root_folder,
@@ -89,15 +110,14 @@ class ReadarrClient:
                         "searchForMissingBooks": True,
                     },
                 }
-                # Copy over images and other metadata from lookup
                 for key in ("images", "overview", "links", "genres", "ratings"):
-                    if lookup_author.get(key):
-                        author[key] = lookup_author[key]
+                    if best.get(key):
+                        author_payload[key] = best[key]
             else:
-                # No lookup result — build minimal payload
-                author = {
+                # No lookup result — use what we have
+                author_payload = {
                     "authorName": author_name,
-                    "foreignAuthorId": author_data.get("foreignAuthorId", ""),
+                    "foreignAuthorId": foreign_author_id,
                     "qualityProfileId": quality_profile_id,
                     "metadataProfileId": 1,
                     "rootFolderPath": root_folder,
@@ -108,7 +128,7 @@ class ReadarrClient:
                 }
 
             resp = self.session.post(
-                self._url("/author"), json=author, timeout=30
+                self._url("/author"), json=author_payload, timeout=30
             )
             resp.raise_for_status()
             added_author = resp.json()
