@@ -195,32 +195,47 @@ class ReadarrClient:
         )
         logger.info("Author for book '%s': %s (id=%s)", book_data.get("title"), added_author.get("authorName"), added_author.get("id"))
 
-        # Build a clean payload.  The lookup result contains computed
-        # properties (ratings, authorTitle, seriesTitle, etc.) and a
-        # broken `author` sub-object that crash BookResource validation.
-        # Only pass the fields Readarr actually expects on POST.
-        # The nested `author` object must have valid foreignAuthorId and
-        # rootFolderPath or the BookResource validator rejects it (400).
-        # Without `author` at all, the NRE returns (500).
+        foreign_book_id = book_data.get("foreignBookId", "")
+        foreign_edition_id = book_data.get("foreignEditionId", "")
+        title = book_data.get("title", "Unknown")
+
+        # Check if the book already exists in Readarr
+        if foreign_book_id:
+            existing_books = self.session.get(self._url("/book"), timeout=15).json()
+            match = next(
+                (b for b in existing_books if b.get("foreignBookId") == foreign_book_id),
+                None,
+            )
+            if match:
+                logger.info("Book already exists: '%s' (id=%s)", match.get("title"), match.get("id"))
+                return match
+
+        # Build the edition payload.  Readarr's EditionResourceMapper.ToModel
+        # throws ArgumentNullException('source') when editions is null.
+        # The lookup result has images/links/ratings at the book level
+        # but not at the edition level — EditionResource expects them.
+        edition = {
+            "foreignEditionId": foreign_edition_id,
+            "title": title,
+            "monitored": True,
+        }
+        # Copy edition-level fields from the lookup if present
+        for key in ("images", "links", "ratings", "disambiguation",
+                    "remoteCover", "grabbed", "titleSlug"):
+            if key in book_data:
+                edition[key] = book_data[key]
+
         book_payload = {
-            "foreignBookId": book_data.get("foreignBookId", ""),
-            "foreignEditionId": book_data.get("foreignEditionId", ""),
-            "title": book_data.get("title", "Unknown"),
+            "foreignBookId": foreign_book_id,
+            "foreignEditionId": foreign_edition_id,
+            "title": title,
             "authorId": added_author.get("id"),
             "qualityProfileId": quality_profile_id,
             "rootFolderPath": root_folder,
             "monitored": True,
             "anyEditionOk": True,
-            "genres": book_data.get("genres") or [],
-            "links": book_data.get("links") or [],
-            "images": book_data.get("images") or [],
-            "author": {
-                "id": added_author.get("id"),
-                "authorName": added_author.get("authorName", ""),
-                "foreignAuthorId": added_author.get("foreignAuthorId", ""),
-                "qualityProfileId": quality_profile_id,
-                "rootFolderPath": root_folder,
-            },
+            "editions": [edition],
+            "author": added_author,
             "addOptions": {
                 "addType": "automatic",
                 "searchForNewBook": True,
@@ -234,6 +249,17 @@ class ReadarrClient:
         )
 
         if not resp.ok:
+            # The book may already exist (orphaned from a prior partial add).
+            # Re-check and return the existing book.
+            existing_books = self.session.get(self._url("/book"), timeout=15).json()
+            match = next(
+                (b for b in existing_books if b.get("foreignBookId") == foreign_book_id),
+                None,
+            )
+            if match:
+                logger.info("Book already exists (after POST error): '%s' (id=%s)", match.get("title"), match.get("id"))
+                return match
+
             logger.error("POST /book failed (%d): %s", resp.status_code, resp.text[:500])
 
         resp.raise_for_status()
