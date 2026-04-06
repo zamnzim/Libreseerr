@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime
 
+import requests as http_requests
 from flask import Flask, jsonify, render_template, request
 from readarr import ReadarrClient
 
@@ -116,19 +117,48 @@ def test_config():
         return jsonify({"error": str(e)}), 400
 
 
-# ---------- Readarr Proxy API ----------
+# ---------- Search API (Google Books) ----------
 
 @app.route("/api/search")
 def search_books():
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify([])
-    # Search using whichever server is configured (prefer ebook)
-    client = get_client("ebook") or get_client("audiobook")
-    if not client:
-        return jsonify({"error": "No Readarr server configured"}), 400
     try:
-        results = client.search_books(query)
+        resp = http_requests.get(
+            "https://www.googleapis.com/books/v1/volumes",
+            params={"q": query, "maxResults": 20},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for item in data.get("items", []):
+            info = item.get("volumeInfo", {})
+            identifiers = info.get("industryIdentifiers", [])
+            isbn_13 = ""
+            isbn_10 = ""
+            for ident in identifiers:
+                if ident.get("type") == "ISBN_13":
+                    isbn_13 = ident["identifier"]
+                elif ident.get("type") == "ISBN_10":
+                    isbn_10 = ident["identifier"]
+            cover = info.get("imageLinks", {}).get("thumbnail", "")
+            if cover:
+                cover = cover.replace("http://", "https://")
+            results.append({
+                "id": item.get("id", ""),
+                "title": info.get("title", "Unknown"),
+                "authors": info.get("authors", []),
+                "publishedDate": info.get("publishedDate", ""),
+                "description": info.get("description", ""),
+                "pageCount": info.get("pageCount", 0),
+                "categories": info.get("categories", []),
+                "isbn_13": isbn_13,
+                "isbn_10": isbn_10,
+                "cover": cover,
+                "language": info.get("language", "en"),
+            })
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -176,17 +206,10 @@ def create_request():
         return jsonify({"error": f"{server_type} server not configured"}), 400
 
     title = book_data.get("title", "Unknown")
-    author_name = ""
-    cover_url = ""
-    if book_data.get("author"):
-        author_name = book_data["author"].get("authorName", "")
-        images = book_data["author"].get("images", [])
-        if images:
-            cover_url = images[0].get("url", "")
-    if not cover_url:
-        images = book_data.get("images", [])
-        if images:
-            cover_url = images[0].get("url", "")
+    authors = book_data.get("authors", [])
+    author_name = authors[0] if authors else "Unknown"
+    cover_url = book_data.get("cover", "")
+    isbn = book_data.get("isbn_13") or book_data.get("isbn_10", "")
 
     request_entry = {
         "id": int(time.time() * 1000),
@@ -199,13 +222,34 @@ def create_request():
         "progress": 0,
         "error": None,
         "created_at": datetime.utcnow().isoformat(),
-        "book_data": book_data,
     }
 
     try:
-        result = client.add_book(book_data, quality_profile_id, root_folder)
+        # First, try to find the book in Readarr via ISBN lookup
+        readarr_books = []
+        if isbn:
+            readarr_books = client.lookup_by_isbn(isbn)
+        if not readarr_books:
+            readarr_books = client.lookup_by_title(f"{title} {author_name}")
+
+        if readarr_books:
+            # Use the first Readarr match
+            readarr_book = readarr_books[0]
+            request_entry["status"] = "downloading"
+        else:
+            # Fallback: build Readarr-compatible data from Google Books
+            readarr_book = {
+                "title": title,
+                "author": {
+                    "authorName": author_name,
+                    "foreignAuthorId": author_name.lower().replace(" ", ""),
+                },
+                "foreignBookId": isbn or book_data.get("id", ""),
+            }
+            request_entry["status"] = "downloading"
+
+        result = client.add_book(readarr_book, quality_profile_id, root_folder)
         request_entry["readarr_book_id"] = result.get("id")
-        request_entry["status"] = "downloading"
     except Exception as e:
         request_entry["status"] = "error"
         request_entry["error"] = str(e)

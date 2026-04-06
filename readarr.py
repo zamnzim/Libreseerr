@@ -28,6 +28,22 @@ class ReadarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    def lookup_by_isbn(self, isbn: str) -> list:
+        """Look up a book in Readarr by ISBN."""
+        resp = self.session.get(
+            self._url("/book/lookup"), params={"term": f"isbn:{isbn}"}, timeout=15
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def lookup_author(self, name: str) -> list:
+        """Look up an author in Readarr by name."""
+        resp = self.session.get(
+            self._url("/author/lookup"), params={"term": name}, timeout=15
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def get_quality_profiles(self) -> list:
         """Get available quality profiles."""
         resp = self.session.get(self._url("/qualityprofile"), timeout=10)
