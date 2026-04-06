@@ -195,22 +195,35 @@ class ReadarrClient:
         )
         logger.info("Author for book '%s': %s (id=%s)", book_data.get("title"), added_author.get("authorName"), added_author.get("id"))
 
-        # Add the book
+        # Build book payload — use edition data from lookup result if available
+        editions = book_data.get("editions", [])
+        if editions:
+            edition = editions[0].copy()
+            edition["monitored"] = True
+        else:
+            edition = {
+                "title": book_data.get("title", "Unknown"),
+                "foreignEditionId": book_data.get("foreignBookId", ""),
+                "monitored": True,
+            }
+
         book_payload = {
             "foreignBookId": book_data.get("foreignBookId", ""),
             "title": book_data.get("title", "Unknown"),
             "authorId": added_author.get("id"),
-            "edition": {
-                "title": book_data.get("title", "Unknown"),
-                "foreignEditionId": book_data.get("foreignBookId", ""),
-                "monitored": True,
-            },
+            "edition": edition,
             "monitored": True,
             "addOptions": {
                 "addType": "automatic",
                 "searchForNewBook": True,
             },
         }
+
+        # Preserve fields from book lookup that Readarr expects
+        for key in ("images", "links", "genres", "ratings", "overview"):
+            if book_data.get(key):
+                book_payload[key] = book_data[key]
+
         logger.info("Adding book: %s", json.dumps(book_payload, default=str))
 
         resp = self.session.post(

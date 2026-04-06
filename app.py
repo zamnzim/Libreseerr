@@ -243,22 +243,18 @@ def create_request():
             readarr_books = client.lookup_by_title(f"{title} {author_name}")
 
         if readarr_books:
-            # Use the Readarr match for the book ID, but always use our
-            # author name from Google Books (Readarr lookup may have empty
-            # or wrong author data).
-            matched = readarr_books[0]
-            readarr_author = matched.get("author", {})
-            readarr_book = {
-                "title": matched.get("title", title),
-                "author": {
-                    "authorName": readarr_author.get("authorName") or author_name,
-                    "foreignAuthorId": readarr_author.get("foreignAuthorId", ""),
-                },
-                "foreignBookId": matched.get("foreignBookId", isbn or book_data.get("id", "")),
-            }
+            # Use the full Readarr lookup result — it has the correct
+            # editions, images, links, etc. that Readarr expects.
+            # We only override the author if Readarr returned empty data.
+            readarr_book = readarr_books[0]
+            if not readarr_book.get("author", {}).get("authorName"):
+                readarr_book["author"] = {
+                    "authorName": author_name,
+                    "foreignAuthorId": "",
+                }
             app.logger.info(
                 "Readarr match for '%s': title='%s', author=%s",
-                title, readarr_book["title"], json.dumps(readarr_book["author"]),
+                title, readarr_book.get("title"), json.dumps(readarr_book.get("author", {})),
             )
             request_entry["status"] = "downloading"
         else:
