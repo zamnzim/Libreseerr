@@ -62,11 +62,12 @@ async function doSearch() {
 
 function renderBookCard(book) {
     const title = book.title || "Unknown Title";
-    const author = book.author?.authorName || "Unknown Author";
-    const year = book.releaseDate ? book.releaseDate.substring(0, 4) : "";
+    const author = book.author?.authorName || (Array.isArray(book.authors) ? book.authors.join(", ") : "Unknown Author");
+    const year = book.releaseDate ? book.releaseDate.substring(0, 4) : book.publishedDate ? book.publishedDate.substring(0, 4) : "";
     let cover = "";
     if (book.author?.images?.length) cover = book.author.images[0].url;
     if (!cover && book.images?.length) cover = book.images[0].url;
+    if (!cover && book.cover) cover = book.cover;
     if (!cover) cover = "https://via.placeholder.com/200x300/2d2030/e85d9a?text=No+Cover";
     const bookJson = JSON.stringify(book).replace(/"/g, "&quot;");
 

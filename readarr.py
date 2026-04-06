@@ -68,7 +68,7 @@ class ReadarrClient:
             "rootFolderPath": root_folder,
             "addOptions": {
                 "monitor": "all",
-                "searchForMissingAlbums": True,
+                "searchForMissingBooks": True,
             },
         }
 
