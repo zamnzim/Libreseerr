@@ -287,7 +287,7 @@ class ReadarrClient:
 
     def get_queue(self) -> list:
         """Get current download queue."""
-        resp = self.session.get(self._url("/queue"), timeout=10)
+        resp = self.session.get(self._url("/queue"), params={"pageSize": 200}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         return data.get("records", data) if isinstance(data, dict) else data

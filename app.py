@@ -301,9 +301,11 @@ def refresh_requests():
                 continue
             try:
                 queue = client.get_queue()
+                req_book_id = req.get("readarr_book_id")
                 matching = [
                     q for q in queue
                     if q.get("title", "").lower() == req["title"].lower()
+                    or (req_book_id and str(q.get("bookId")) == str(req_book_id))
                 ]
                 if matching:
                     q = matching[0]
