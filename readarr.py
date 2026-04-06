@@ -199,6 +199,8 @@ class ReadarrClient:
             "foreignBookId": book_data.get("foreignBookId", ""),
             "title": book_data.get("title", "Unknown"),
             "authorId": added_author.get("id"),
+            "qualityProfileId": quality_profile_id,
+            "rootFolderPath": root_folder,
             "monitored": True,
             "addOptions": {
                 "addType": "automatic",
