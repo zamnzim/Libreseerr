@@ -58,26 +58,60 @@ class ReadarrClient:
 
     def add_book(self, book_data: dict, quality_profile_id: int, root_folder: str) -> dict:
         """Add a book to Readarr for downloading."""
-        # Build the author payload from book data
         author_data = book_data.get("author", {})
-        author = {
-            "authorName": author_data.get("authorName", "Unknown"),
-            "foreignAuthorId": author_data.get("foreignAuthorId", ""),
-            "qualityProfileId": quality_profile_id,
-            "metadataProfileId": 1,
-            "rootFolderPath": root_folder,
-            "addOptions": {
-                "monitor": "all",
-                "searchForMissingBooks": True,
-            },
-        }
+        author_name = author_data.get("authorName", "Unknown")
 
-        # Add the author first
-        resp = self.session.post(
-            self._url("/author"), json=author, timeout=30
+        # First, try to find the author already in Readarr
+        existing_authors = self.session.get(
+            self._url("/author"), timeout=15
+        ).json()
+        added_author = next(
+            (a for a in existing_authors if a.get("authorName", "").lower() == author_name.lower()),
+            None,
         )
-        resp.raise_for_status()
-        added_author = resp.json()
+
+        if not added_author:
+            # Author not in Readarr yet — look them up via metadata provider
+            author_lookup = self.session.get(
+                self._url("/author/lookup"), params={"term": author_name}, timeout=15
+            )
+            if author_lookup.ok and author_lookup.json():
+                # Use the first lookup result which has proper foreignAuthorId
+                lookup_author = author_lookup.json()[0]
+                author = {
+                    "authorName": lookup_author.get("authorName", author_name),
+                    "foreignAuthorId": lookup_author.get("foreignAuthorId", ""),
+                    "qualityProfileId": quality_profile_id,
+                    "metadataProfileId": 1,
+                    "rootFolderPath": root_folder,
+                    "addOptions": {
+                        "monitor": "all",
+                        "searchForMissingBooks": True,
+                    },
+                }
+                # Copy over images and other metadata from lookup
+                for key in ("images", "overview", "links", "genres", "ratings"):
+                    if lookup_author.get(key):
+                        author[key] = lookup_author[key]
+            else:
+                # No lookup result — build minimal payload
+                author = {
+                    "authorName": author_name,
+                    "foreignAuthorId": author_data.get("foreignAuthorId", ""),
+                    "qualityProfileId": quality_profile_id,
+                    "metadataProfileId": 1,
+                    "rootFolderPath": root_folder,
+                    "addOptions": {
+                        "monitor": "all",
+                        "searchForMissingBooks": True,
+                    },
+                }
+
+            resp = self.session.post(
+                self._url("/author"), json=author, timeout=30
+            )
+            resp.raise_for_status()
+            added_author = resp.json()
 
         # Add the book
         book_payload = {
