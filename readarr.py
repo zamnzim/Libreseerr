@@ -195,6 +195,9 @@ class ReadarrClient:
         )
         logger.info("Author for book '%s': %s (id=%s)", book_data.get("title"), added_author.get("authorName"), added_author.get("id"))
 
+        # Build a minimal payload — Readarr's validator chokes on the
+        # nested author object returned by /book/lookup, so we only
+        # send the fields it actually needs.
         book_payload = {
             "foreignBookId": book_data.get("foreignBookId", ""),
             "title": book_data.get("title", "Unknown"),
@@ -207,6 +210,10 @@ class ReadarrClient:
                 "searchForNewBook": True,
             },
         }
+        # Preserve editions from the lookup result if present (Readarr
+        # needs at least one edition to know which edition to download).
+        if book_data.get("editions"):
+            book_payload["editions"] = book_data["editions"]
 
         logger.info("Adding book payload: %s", json.dumps(book_payload, default=str))
 
