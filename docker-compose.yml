@@ -1,0 +1,11 @@
+services:
+  libreseerr:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - libreseerr-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  libreseerr-data:

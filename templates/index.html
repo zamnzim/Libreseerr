@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Libreseerr</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">Libreseerr</div>
+        <div class="nav-links">
+            <a href="#" class="nav-link active" data-page="search">Discover</a>
+            <a href="#" class="nav-link" data-page="requests">Requests</a>
+            <a href="#" class="nav-link" data-page="settings">Settings</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <!-- Search Page -->
+        <div id="page-search" class="page active">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search for books..." autocomplete="off">
+                <button id="search-btn" class="btn btn-primary">Search</button>
+            </div>
+            <div id="search-results" class="results-grid"></div>
+        </div>
+
+        <!-- Requests Page -->
+        <div id="page-requests" class="page">
+            <div class="page-header">
+                <h2>Request History</h2>
+                <button id="refresh-btn" class="btn btn-secondary">Refresh Status</button>
+            </div>
+            <div id="requests-list" class="requests-list"></div>
+        </div>
+
+        <!-- Settings Page -->
+        <div id="page-settings" class="page">
+            <h2>Server Configuration</h2>
+            <div class="settings-grid">
+                <div class="settings-card">
+                    <h3>Ebook Server (Readarr)</h3>
+                    <div class="form-group">
+                        <label for="ebook-url">URL</label>
+                        <input type="text" id="ebook-url" placeholder="http://192.168.1.100:8787">
+                    </div>
+                    <div class="form-group">
+                        <label for="ebook-api">API Key</label>
+                        <input type="password" id="ebook-api" placeholder="Readarr API Key">
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="testConnection('ebook')">Test</button>
+                        <button class="btn btn-primary" onclick="saveConfig('ebook')">Save</button>
+                    </div>
+                    <div id="ebook-status" class="status-msg"></div>
+                </div>
+                <div class="settings-card">
+                    <h3>Audiobook Server (Readarr)</h3>
+                    <div class="form-group">
+                        <label for="audiobook-url">URL</label>
+                        <input type="text" id="audiobook-url" placeholder="http://192.168.1.100:8788">
+                    </div>
+                    <div class="form-group">
+                        <label for="audiobook-api">API Key</label>
+                        <input type="password" id="audiobook-api" placeholder="Readarr API Key">
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="testConnection('audiobook')">Test</button>
+                        <button class="btn btn-primary" onclick="saveConfig('audiobook')">Save</button>
+                    </div>
+                    <div id="audiobook-status" class="status-msg"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Download Modal -->
+    <div id="download-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Download Book</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Download Server</label>
+                    <div class="server-select">
+                        <button class="server-btn active" data-server="ebook">Ebook</button>
+                        <button class="server-btn" data-server="audiobook">Audiobook</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="quality-profile">Quality Profile</label>
+                    <select id="quality-profile"><option>Loading...</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="root-folder">Root Folder</label>
+                    <select id="root-folder"><option>Loading...</option></select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" id="confirm-download-btn">Download</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

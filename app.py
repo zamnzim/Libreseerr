@@ -1,0 +1,281 @@
+import json
+import os
+import threading
+import time
+from datetime import datetime
+
+from flask import Flask, jsonify, render_template, request
+from readarr import ReadarrClient
+
+app = Flask(__name__)
+
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "data", "config.json")
+REQUESTS_FILE = os.path.join(os.path.dirname(__file__), "data", "requests.json")
+
+# In-memory state
+config = {"ebook": {}, "audiobook": {}}
+requests_history = []
+lock = threading.Lock()
+
+
+def ensure_data_dir():
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    os.makedirs(data_dir, exist_ok=True)
+
+
+def save_config():
+    ensure_data_dir()
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def load_config():
+    global config
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE) as f:
+            config = json.load(f)
+
+
+def save_requests():
+    ensure_data_dir()
+    with open(REQUESTS_FILE, "w") as f:
+        json.dump(requests_history, f, indent=2, default=str)
+
+
+def load_requests():
+    global requests_history
+    if os.path.exists(REQUESTS_FILE):
+        with open(REQUESTS_FILE) as f:
+            requests_history = json.load(f)
+
+
+load_config()
+load_requests()
+
+
+def get_client(server_type: str) -> ReadarrClient | None:
+    """Get a ReadarrClient for the given server type."""
+    server = config.get(server_type, {})
+    if server.get("url") and server.get("api_key"):
+        return ReadarrClient(server["url"], server["api_key"])
+    return None
+
+
+# ---------- Pages ----------
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+# ---------- Config API ----------
+
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    return jsonify({
+        "ebook": {
+            "url": config["ebook"].get("url", ""),
+            "api_key": config["ebook"].get("api_key", ""),
+            "configured": bool(config["ebook"].get("url") and config["ebook"].get("api_key")),
+        },
+        "audiobook": {
+            "url": config["audiobook"].get("url", ""),
+            "api_key": config["audiobook"].get("api_key", ""),
+            "configured": bool(config["audiobook"].get("url") and config["audiobook"].get("api_key")),
+        },
+    })
+
+
+@app.route("/api/config", methods=["POST"])
+def update_config():
+    data = request.json
+    server_type = data.get("server_type")
+    if server_type not in ("ebook", "audiobook"):
+        return jsonify({"error": "server_type must be 'ebook' or 'audiobook'"}), 400
+
+    config[server_type] = {
+        "url": data.get("url", "").strip(),
+        "api_key": data.get("api_key", "").strip(),
+    }
+    save_config()
+    return jsonify({"success": True})
+
+
+@app.route("/api/config/test", methods=["POST"])
+def test_config():
+    data = request.json
+    url = data.get("url", "").strip()
+    api_key = data.get("api_key", "").strip()
+    if not url or not api_key:
+        return jsonify({"error": "url and api_key are required"}), 400
+    try:
+        client = ReadarrClient(url, api_key)
+        status = client.test_connection()
+        return jsonify({"success": True, "status": status})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+# ---------- Readarr Proxy API ----------
+
+@app.route("/api/search")
+def search_books():
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify([])
+    # Search using whichever server is configured (prefer ebook)
+    client = get_client("ebook") or get_client("audiobook")
+    if not client:
+        return jsonify({"error": "No Readarr server configured"}), 400
+    try:
+        results = client.search_books(query)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/profiles/<server_type>")
+def get_profiles(server_type):
+    client = get_client(server_type)
+    if not client:
+        return jsonify({"error": f"{server_type} server not configured"}), 400
+    try:
+        profiles = client.get_quality_profiles()
+        return jsonify(profiles)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rootfolders/<server_type>")
+def get_root_folders(server_type):
+    client = get_client(server_type)
+    if not client:
+        return jsonify({"error": f"{server_type} server not configured"}), 400
+    try:
+        folders = client.get_root_folders()
+        return jsonify(folders)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------- Download / Request API ----------
+
+@app.route("/api/request", methods=["POST"])
+def create_request():
+    data = request.json
+    server_type = data.get("server_type")
+    book_data = data.get("book")
+    quality_profile_id = data.get("quality_profile_id")
+    root_folder = data.get("root_folder")
+
+    if not all([server_type, book_data, quality_profile_id, root_folder]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    client = get_client(server_type)
+    if not client:
+        return jsonify({"error": f"{server_type} server not configured"}), 400
+
+    title = book_data.get("title", "Unknown")
+    author_name = ""
+    cover_url = ""
+    if book_data.get("author"):
+        author_name = book_data["author"].get("authorName", "")
+        images = book_data["author"].get("images", [])
+        if images:
+            cover_url = images[0].get("url", "")
+    if not cover_url:
+        images = book_data.get("images", [])
+        if images:
+            cover_url = images[0].get("url", "")
+
+    request_entry = {
+        "id": int(time.time() * 1000),
+        "title": title,
+        "author": author_name,
+        "cover_url": cover_url,
+        "server_type": server_type,
+        "quality_profile_id": quality_profile_id,
+        "status": "pending",
+        "progress": 0,
+        "error": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "book_data": book_data,
+    }
+
+    try:
+        result = client.add_book(book_data, quality_profile_id, root_folder)
+        request_entry["readarr_book_id"] = result.get("id")
+        request_entry["status"] = "downloading"
+    except Exception as e:
+        request_entry["status"] = "error"
+        request_entry["error"] = str(e)
+
+    with lock:
+        requests_history.insert(0, request_entry)
+        save_requests()
+
+    return jsonify(request_entry)
+
+
+@app.route("/api/requests", methods=["GET"])
+def get_requests():
+    with lock:
+        return jsonify(requests_history)
+
+
+@app.route("/api/requests/refresh", methods=["POST"])
+def refresh_requests():
+    """Refresh the status of all pending/downloading requests."""
+    with lock:
+        for req in requests_history:
+            if req["status"] in ("completed", "error"):
+                continue
+            client = get_client(req["server_type"])
+            if not client:
+                continue
+            try:
+                queue = client.get_queue()
+                matching = [
+                    q for q in queue
+                    if q.get("title", "").lower() == req["title"].lower()
+                ]
+                if matching:
+                    q = matching[0]
+                    status = q.get("status", "").lower()
+                    size = q.get("size", 0)
+                    size_left = q.get("sizeleft", 0)
+                    if size > 0:
+                        req["progress"] = round((1 - size_left / size) * 100)
+                    if status == "completed":
+                        req["status"] = "completed"
+                        req["progress"] = 100
+                    elif status in ("failed", "warning"):
+                        req["status"] = "error"
+                        req["error"] = q.get("errorMessage", "Download failed")
+                else:
+                    # Check Readarr history
+                    book_id = req.get("readarr_book_id")
+                    if book_id:
+                        book = client.get_book_status(book_id)
+                        if book and book.get("statistics"):
+                            stats = book["statistics"]
+                            if stats.get("bookFileCount", 0) > 0:
+                                req["status"] = "completed"
+                                req["progress"] = 100
+            except Exception as e:
+                pass  # Keep current status on error
+        save_requests()
+    return jsonify(requests_history)
+
+
+@app.route("/api/requests/<int:request_id>", methods=["DELETE"])
+def delete_request(request_id):
+    with lock:
+        global requests_history
+        requests_history = [r for r in requests_history if r["id"] != request_id]
+        save_requests()
+    return jsonify({"success": True})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
