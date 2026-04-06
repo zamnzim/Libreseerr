@@ -1,5 +1,8 @@
 import requests
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ReadarrClient:
@@ -50,88 +53,123 @@ class ReadarrClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_metadata_profiles(self) -> list:
+        """Get available metadata profiles."""
+        resp = self.session.get(self._url("/metadataprofile"), timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
     def get_root_folders(self) -> list:
         """Get configured root folders."""
         resp = self.session.get(self._url("/rootfolder"), timeout=10)
         resp.raise_for_status()
         return resp.json()
 
-    def add_book(self, book_data: dict, quality_profile_id: int, root_folder: str) -> dict:
-        """Add a book to Readarr for downloading."""
-        author_data = book_data.get("author", {})
+    def _get_metadata_profile_id(self) -> int:
+        """Get the first available metadata profile ID."""
+        profiles = self.get_metadata_profiles()
+        if not profiles:
+            raise ValueError("No metadata profiles configured in Readarr")
+        return profiles[0].get("id")
+
+    def _ensure_author(self, author_data: dict, quality_profile_id: int, root_folder: str) -> dict:
+        """Ensure the author exists in Readarr. Returns the author record."""
         author_name = author_data.get("authorName", "Unknown")
         foreign_author_id = author_data.get("foreignAuthorId", "")
 
-        # Check if the author already exists in Readarr
-        existing_authors = self.session.get(
-            self._url("/author"), timeout=15
-        ).json()
-        added_author = None
+        # Check existing authors in Readarr
+        existing = self.session.get(self._url("/author"), timeout=15).json()
 
+        # Match by foreignAuthorId first (most reliable)
         if foreign_author_id:
-            # Match by foreignAuthorId (reliable — from book lookup result)
-            added_author = next(
-                (a for a in existing_authors if a.get("foreignAuthorId") == foreign_author_id),
+            match = next(
+                (a for a in existing if a.get("foreignAuthorId") == foreign_author_id),
                 None,
             )
-        if not added_author:
-            # Match by name as fallback
-            added_author = next(
-                (a for a in existing_authors if a.get("authorName", "").lower() == author_name.lower()),
-                None,
-            )
+            if match:
+                return match
 
-        if not added_author:
-            # Need to add the author — look up via metadata provider
-            lookup_term = foreign_author_id or author_name
-            author_lookup = self.session.get(
-                self._url("/author/lookup"), params={"term": lookup_term}, timeout=15
+        # Match by name
+        match = next(
+            (a for a in existing if a.get("authorName", "").lower() == author_name.lower()),
+            None,
+        )
+        if match:
+            return match
+
+        # Author not in Readarr — need to add it
+        # If we don't have a valid foreignAuthorId, look up the author by name
+        # to get the correct metadata provider ID first.
+        if not foreign_author_id:
+            lookup = self.session.get(
+                self._url("/author/lookup"),
+                params={"term": author_name},
+                timeout=15,
             )
-            if author_lookup.ok and author_lookup.json():
-                # Find best match from lookup results
-                lookup_results = author_lookup.json()
-                if foreign_author_id:
-                    # Prefer exact foreignAuthorId match
-                    best = next(
-                        (a for a in lookup_results if a.get("foreignAuthorId") == foreign_author_id),
-                        None,
-                    ) or lookup_results[0]
+            if lookup.ok and lookup.json():
+                exact = [
+                    a for a in lookup.json()
+                    if a.get("authorName", "").lower() == author_name.lower()
+                ]
+                if exact:
+                    author_data = exact[0]
+                    foreign_author_id = author_data.get("foreignAuthorId", "")
                 else:
-                    # Use first result — should be most relevant for name searches
-                    best = lookup_results[0]
-                author_payload = {
-                    "authorName": best.get("authorName", author_name),
-                    "foreignAuthorId": best.get("foreignAuthorId", foreign_author_id),
-                    "qualityProfileId": quality_profile_id,
-                    "metadataProfileId": 1,
-                    "rootFolderPath": root_folder,
-                    "addOptions": {
-                        "monitor": "all",
-                        "searchForMissingBooks": True,
-                    },
-                }
-                for key in ("images", "overview", "links", "genres", "ratings"):
-                    if best.get(key):
-                        author_payload[key] = best[key]
+                    raise ValueError(
+                        f"Could not find author '{author_name}' in Readarr metadata"
+                    )
             else:
-                # No lookup result — use what we have
-                author_payload = {
-                    "authorName": author_name,
-                    "foreignAuthorId": foreign_author_id,
-                    "qualityProfileId": quality_profile_id,
-                    "metadataProfileId": 1,
-                    "rootFolderPath": root_folder,
-                    "addOptions": {
-                        "monitor": "all",
-                        "searchForMissingBooks": True,
-                    },
-                }
+                raise ValueError(
+                    f"Could not find author '{author_name}' in Readarr metadata"
+                )
 
-            resp = self.session.post(
-                self._url("/author"), json=author_payload, timeout=30
-            )
-            resp.raise_for_status()
-            added_author = resp.json()
+        metadata_profile_id = self._get_metadata_profile_id()
+        author_payload = {
+            "authorName": author_data.get("authorName", author_name),
+            "foreignAuthorId": foreign_author_id,
+            "qualityProfileId": quality_profile_id,
+            "metadataProfileId": metadata_profile_id,
+            "rootFolderPath": root_folder,
+            "addOptions": {
+                "monitor": "all",
+                "searchForMissingBooks": True,
+            },
+        }
+        for key in ("images", "overview", "links", "genres", "ratings"):
+            if author_data.get(key):
+                author_payload[key] = author_data[key]
+
+        resp = self.session.post(
+            self._url("/author"), json=author_payload, timeout=30
+        )
+
+        if resp.ok:
+            return resp.json()
+
+        # Still failing — check if author was added by another process
+        updated = self.session.get(self._url("/author"), timeout=15).json()
+        match = next(
+            (a for a in updated if a.get("foreignAuthorId") == foreign_author_id),
+            None,
+        )
+        if match:
+            return match
+        match = next(
+            (a for a in updated if a.get("authorName", "").lower() == author_name.lower()),
+            None,
+        )
+        if match:
+            return match
+
+        resp.raise_for_status()
+
+    def add_book(self, book_data: dict, quality_profile_id: int, root_folder: str) -> dict:
+        """Add a book to Readarr for downloading."""
+        added_author = self._ensure_author(
+            book_data.get("author", {}),
+            quality_profile_id,
+            root_folder,
+        )
 
         # Add the book
         book_payload = {

@@ -235,6 +235,8 @@ def create_request():
         if readarr_books:
             # Use the first Readarr match
             readarr_book = readarr_books[0]
+            # Debug: log the full structure of the Readarr book lookup result
+            app.logger.info("Readarr book lookup result: %s", json.dumps(readarr_book, default=str))
             request_entry["status"] = "downloading"
         else:
             # Fallback: build Readarr-compatible data from Google Books
@@ -242,10 +244,11 @@ def create_request():
                 "title": title,
                 "author": {
                     "authorName": author_name,
-                    "foreignAuthorId": author_name.lower().replace(" ", ""),
+                    "foreignAuthorId": "",
                 },
                 "foreignBookId": isbn or book_data.get("id", ""),
             }
+            app.logger.info("No Readarr match found, using fallback: %s", json.dumps(readarr_book, default=str))
             request_entry["status"] = "downloading"
 
         result = client.add_book(readarr_book, quality_profile_id, root_folder)
