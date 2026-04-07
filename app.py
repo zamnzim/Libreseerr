@@ -248,7 +248,7 @@ def create_request():
         if isbn:
             readarr_books = client.lookup_by_isbn(isbn)
         if not readarr_books:
-            readarr_books = client.lookup_by_title(f"{title} {author_name}")
+            readarr_books = client.search_books(f"{title} {author_name}")
 
         if readarr_books:
             # Use the full Readarr lookup result — it has the correct
