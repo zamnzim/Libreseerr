@@ -44,6 +44,14 @@ body {
     font-weight: 700;
     color: var(--pink-primary);
     letter-spacing: -0.5px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-logo {
+    height: 28px;
+    width: 28px;
 }
 
 .nav-links { display: flex; gap: 0.5rem; }

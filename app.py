@@ -127,7 +127,7 @@ def test_config():
         return jsonify({"error": str(e)}), 400
 
 
-# ---------- Search API (Google Books) ----------
+# ---------- Search API (Open Library) ----------
 
 @app.route("/api/search")
 def search_books():
@@ -136,38 +136,46 @@ def search_books():
         return jsonify([])
     try:
         resp = http_requests.get(
-            "https://www.googleapis.com/books/v1/volumes",
-            params={"q": query, "maxResults": 20},
+            "https://openlibrary.org/search.json",
+            params={"q": query, "limit": 20},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
         results = []
-        for item in data.get("items", []):
-            info = item.get("volumeInfo", {})
-            identifiers = info.get("industryIdentifiers", [])
-            isbn_13 = ""
-            isbn_10 = ""
-            for ident in identifiers:
-                if ident.get("type") == "ISBN_13":
-                    isbn_13 = ident["identifier"]
-                elif ident.get("type") == "ISBN_10":
-                    isbn_10 = ident["identifier"]
-            cover = info.get("imageLinks", {}).get("thumbnail", "")
-            if cover:
-                cover = cover.replace("http://", "https://")
+        for doc in data.get("docs", []):
+            # Extract ISBNs
+            isbns = doc.get("isbn", [])
+            isbn_13 = next((i for i in isbns if len(i) == 13), "")
+            isbn_10 = next((i for i in isbns if len(i) == 10), "")
+            if not isbn_13 and not isbn_10 and isbns:
+                isbn_13 = isbns[0]
+
+            # Build cover URL from cover_i
+            cover_i = doc.get("cover_i")
+            cover = f"https://covers.openlibrary.org/b/id/{cover_i}-M.jpg" if cover_i else ""
+
+            # Build a unique ID from the Open Library key
+            ol_key = doc.get("key", "")
+            ol_id = ol_key.split("/")[-1] if ol_key else ""
+
+            # Year as string to match existing publishedDate format
+            year = doc.get("first_publish_year")
+            published_date = str(year) if year else ""
+
             results.append({
-                "id": item.get("id", ""),
-                "title": info.get("title", "Unknown"),
-                "authors": info.get("authors", []),
-                "publishedDate": info.get("publishedDate", ""),
-                "description": info.get("description", ""),
-                "pageCount": info.get("pageCount", 0),
-                "categories": info.get("categories", []),
+                "id": ol_id,
+                "title": doc.get("title", "Unknown"),
+                "authors": doc.get("author_name", []),
+                "publishedDate": published_date,
+                "description": "",
+                "pageCount": doc.get("number_of_pages_median", 0),
+                "categories": doc.get("subject", [])[:5] if doc.get("subject") else [],
                 "isbn_13": isbn_13,
                 "isbn_10": isbn_10,
                 "cover": cover,
-                "language": info.get("language", "en"),
+                "language": (doc.get("language", ["en"])[0]
+                             if doc.get("language") else "en"),
             })
         return jsonify(results)
     except Exception as e:
@@ -267,7 +275,7 @@ def create_request():
                 },
                 "foreignBookId": isbn or book_data.get("id", ""),
             }
-            app.logger.info("No Readarr match, using Google Books fallback for '%s' by '%s'", title, author_name)
+            app.logger.info("No Readarr match, using Open Library fallback for '%s' by '%s'", title, author_name)
             request_entry["status"] = "processing"
 
         result = client.add_book(readarr_book, quality_profile_id, root_folder)
