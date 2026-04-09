@@ -22,6 +22,8 @@ Libreseerr is a book request management application for [Readarr](https://readar
 
 - Confirmed combatible with [faustvii/readarr](https://github.com/Faustvii/Readarr/pkgs/container/readarr)
 
+- Confirmed combatible with [penndydreadful/bookshelf](https://github.com/pennydreadful/bookshelf)
+
 ## Installation
 
 ### Docker Run
