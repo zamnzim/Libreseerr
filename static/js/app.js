@@ -277,6 +277,8 @@ async function loadConfig() {
         document.getElementById("ebook-api").value = data.ebook.api_key || "";
         document.getElementById("audiobook-url").value = data.audiobook.url || "";
         document.getElementById("audiobook-api").value = data.audiobook.api_key || "";
+        document.getElementById("ebook-server-software").value = data.ebook.server_software || "readarr";
+        document.getElementById("audiobook-server-software").value = data.audiobook.server_software || "readarr";
     } catch (err) {
         console.error("Failed to load config", err);
     }
@@ -285,13 +287,14 @@ async function loadConfig() {
 window.saveConfig = async function (type) {
     const url = document.getElementById(type + "-url").value;
     const api_key = document.getElementById(type + "-api").value;
+    const server_software = document.getElementById(type + "-server-software").value;
     const statusEl = document.getElementById(type + "-status");
 
     try {
         const resp = await fetch("/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ server_type: type, url, api_key }),
+            body: JSON.stringify({ server_type: type, url, api_key, server_software }),
         });
         const data = await resp.json();
         statusEl.className = "status-msg success";
@@ -307,6 +310,7 @@ window.saveConfig = async function (type) {
 window.testConnection = async function (type) {
     const url = document.getElementById(type + "-url").value;
     const api_key = document.getElementById(type + "-api").value;
+    const server_software = document.getElementById(type + "-server-software").value;
     const statusEl = document.getElementById(type + "-status");
 
     statusEl.className = "status-msg";
@@ -316,7 +320,7 @@ window.testConnection = async function (type) {
         const resp = await fetch("/api/config/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url, api_key }),
+            body: JSON.stringify({ url, api_key, server_software }),
         });
         const data = await resp.json();
         if (data.success) {

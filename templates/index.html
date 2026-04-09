@@ -46,7 +46,14 @@
             <h2>Server Configuration</h2>
             <div class="settings-grid">
                 <div class="settings-card">
-                    <h3>Ebook Server (Readarr)</h3>
+                    <h3>Ebook Server</h3>
+                    <div class="form-group">
+                        <label for="ebook-server-software">Server Software</label>
+                        <select id="ebook-server-software">
+                            <option value="readarr">Readarr</option>
+                            <option value="bookshelf">Bookshelf</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label for="ebook-url">URL</label>
                         <input type="text" id="ebook-url" placeholder="http://192.168.1.100:8787">
@@ -62,7 +69,14 @@
                     <div id="ebook-status" class="status-msg"></div>
                 </div>
                 <div class="settings-card">
-                    <h3>Audiobook Server (Readarr)</h3>
+                    <h3>Audiobook Server</h3>
+                    <div class="form-group">
+                        <label for="audiobook-server-software">Server Software</label>
+                        <select id="audiobook-server-software">
+                            <option value="readarr">Readarr</option>
+                            <option value="bookshelf">Bookshelf</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label for="audiobook-url">URL</label>
                         <input type="text" id="audiobook-url" placeholder="http://192.168.1.100:8788">

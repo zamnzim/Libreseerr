@@ -8,6 +8,7 @@ from datetime import datetime
 
 import requests as http_requests
 from flask import Flask, jsonify, render_template, request
+from bookshelf import BookshelfClient
 from readarr import ReadarrClient
 
 app = Flask(__name__)
@@ -64,10 +65,12 @@ load_config()
 load_requests()
 
 
-def get_client(server_type: str) -> ReadarrClient | None:
-    """Get a ReadarrClient for the given server type."""
+def get_client(server_type: str) -> ReadarrClient | BookshelfClient | None:
+    """Get a client for the given server type based on server_software setting."""
     server = config.get(server_type, {})
     if server.get("url") and server.get("api_key"):
+        if server.get("server_software") == "bookshelf":
+            return BookshelfClient(server["url"], server["api_key"])
         return ReadarrClient(server["url"], server["api_key"])
     return None
 
@@ -87,11 +90,13 @@ def get_config():
         "ebook": {
             "url": config["ebook"].get("url", ""),
             "api_key": config["ebook"].get("api_key", ""),
+            "server_software": config["ebook"].get("server_software", "readarr"),
             "configured": bool(config["ebook"].get("url") and config["ebook"].get("api_key")),
         },
         "audiobook": {
             "url": config["audiobook"].get("url", ""),
             "api_key": config["audiobook"].get("api_key", ""),
+            "server_software": config["audiobook"].get("server_software", "readarr"),
             "configured": bool(config["audiobook"].get("url") and config["audiobook"].get("api_key")),
         },
     })
@@ -107,6 +112,7 @@ def update_config():
     config[server_type] = {
         "url": data.get("url", "").strip(),
         "api_key": data.get("api_key", "").strip(),
+        "server_software": data.get("server_software", "readarr"),
     }
     save_config()
     return jsonify({"success": True})
@@ -120,7 +126,11 @@ def test_config():
     if not url or not api_key:
         return jsonify({"error": "url and api_key are required"}), 400
     try:
-        client = ReadarrClient(url, api_key)
+        server_software = data.get("server_software", "readarr")
+        if server_software == "bookshelf":
+            client = BookshelfClient(url, api_key)
+        else:
+            client = ReadarrClient(url, api_key)
         status = client.test_connection()
         return jsonify({"success": True, "status": status})
     except Exception as e:
