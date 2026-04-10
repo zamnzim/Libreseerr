@@ -117,6 +117,8 @@ Admins can manage users from the **Users** page:
 
 Non-admin users can search for books and make requests but do not have access to the **Settings** or **Users** pages.
 
+LDAP Users are also supported via Users > Advanced.
+
 ![Libreseerr Users Page](screenshots/users.png)
 
 ## Environment Variables
