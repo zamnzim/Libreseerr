@@ -72,7 +72,7 @@ document.querySelectorAll(".sidebar-link").forEach((link) => {
         document.getElementById(pageId).classList.add("active");
         if (link.dataset.page === "requests") loadRequests();
         if (link.dataset.page === "settings") loadConfig();
-        if (link.dataset.page === "users") loadUsers();
+        if (link.dataset.page === "users") { loadUsers(); loadLDAP(); }
         closeSidebar();
     });
 });
@@ -569,6 +569,85 @@ document.getElementById("download-modal").addEventListener("click", (e) => {
 document.getElementById("user-modal").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeUserModal();
 });
+
+// ─── LDAP Configuration ───
+
+async function loadLDAP() {
+    try {
+        const resp = await fetch("/api/ldap");
+        const data = await resp.json();
+        document.getElementById("ldap-enabled").checked = data.enabled || false;
+        document.getElementById("ldap-server-url").value = data.server_url || "";
+        document.getElementById("ldap-bind-dn").value = data.bind_dn || "";
+        document.getElementById("ldap-bind-password").value = data.bind_password || "";
+        document.getElementById("ldap-base-dn").value = data.base_dn || "";
+        document.getElementById("ldap-search-filter").value = data.user_search_filter || "(sAMAccountName={username})";
+        document.getElementById("ldap-default-role").value = data.default_role || "user";
+    } catch (err) {
+        console.error("Failed to load LDAP config", err);
+    }
+}
+
+window.saveLDAP = async function () {
+    const statusEl = document.getElementById("ldap-status");
+    try {
+        const resp = await fetch("/api/ldap", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                enabled: document.getElementById("ldap-enabled").checked,
+                server_url: document.getElementById("ldap-server-url").value,
+                bind_dn: document.getElementById("ldap-bind-dn").value,
+                bind_password: document.getElementById("ldap-bind-password").value,
+                base_dn: document.getElementById("ldap-base-dn").value,
+                user_search_filter: document.getElementById("ldap-search-filter").value,
+                default_role: document.getElementById("ldap-default-role").value,
+            }),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            statusEl.className = "status-msg error";
+            statusEl.textContent = data.error;
+        } else {
+            statusEl.className = "status-msg success";
+            statusEl.textContent = "LDAP configuration saved!";
+        }
+    } catch (err) {
+        statusEl.className = "status-msg error";
+        statusEl.textContent = "Error: " + err.message;
+    }
+    setTimeout(() => { statusEl.textContent = ""; }, 3000);
+};
+
+window.testLDAP = async function () {
+    const statusEl = document.getElementById("ldap-status");
+    statusEl.className = "status-msg";
+    statusEl.textContent = "Testing...";
+    try {
+        const resp = await fetch("/api/ldap/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                server_url: document.getElementById("ldap-server-url").value,
+                bind_dn: document.getElementById("ldap-bind-dn").value,
+                bind_password: document.getElementById("ldap-bind-password").value,
+                base_dn: document.getElementById("ldap-base-dn").value,
+                user_search_filter: document.getElementById("ldap-search-filter").value,
+            }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            statusEl.className = "status-msg success";
+            statusEl.textContent = data.message;
+        } else {
+            statusEl.className = "status-msg error";
+            statusEl.textContent = "Failed: " + data.error;
+        }
+    } catch (err) {
+        statusEl.className = "status-msg error";
+        statusEl.textContent = "Error: " + err.message;
+    }
+};
 
 // ─── Init ───
 

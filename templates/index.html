@@ -151,6 +151,53 @@
                     <button class="btn btn-primary" onclick="openAddUserModal()">Add User</button>
                 </div>
                 <div id="users-list" class="users-list"></div>
+
+                <div class="ldap-section">
+                    <details>
+                        <summary class="ldap-summary">Advanced</summary>
+                        <div class="settings-card" style="margin-top: 1rem;">
+                            <h3>LDAP Configuration</h3>
+                            <div class="form-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="ldap-enabled">
+                                    Enable LDAP Authentication
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="ldap-server-url">Server URL</label>
+                                <input type="text" id="ldap-server-url" placeholder="ldap://dc.example.com:389">
+                            </div>
+                            <div class="form-group">
+                                <label for="ldap-bind-dn">Bind User</label>
+                                <input type="text" id="ldap-bind-dn" placeholder="CN=svc_libreseerr,OU=Service Accounts,DC=example,DC=com">
+                            </div>
+                            <div class="form-group">
+                                <label for="ldap-bind-password">Bind Password</label>
+                                <input type="password" id="ldap-bind-password" placeholder="Bind account password">
+                            </div>
+                            <div class="form-group">
+                                <label for="ldap-base-dn">Base DN</label>
+                                <input type="text" id="ldap-base-dn" placeholder="DC=example,DC=com">
+                            </div>
+                            <div class="form-group">
+                                <label for="ldap-search-filter">User Search Filter</label>
+                                <input type="text" id="ldap-search-filter" placeholder="(sAMAccountName={username})">
+                            </div>
+                            <div class="form-group">
+                                <label for="ldap-default-role">Default Role for New LDAP Users</label>
+                                <select id="ldap-default-role">
+                                    <option value="user">User</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-secondary" onclick="testLDAP()">Test Connection</button>
+                                <button class="btn btn-primary" onclick="saveLDAP()">Save</button>
+                            </div>
+                            <div id="ldap-status" class="status-msg"></div>
+                        </div>
+                    </details>
+                </div>
             </div>
         </main>
     </div>

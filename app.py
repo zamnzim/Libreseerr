@@ -11,6 +11,13 @@ import requests as http_requests
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+
+try:
+    from ldap3 import Server, Connection, ALL, SUBTREE
+    LDAP3_AVAILABLE = True
+except ImportError:
+    LDAP3_AVAILABLE = False
+
 from bookshelf import BookshelfClient
 from readarr import ReadarrClient
 
@@ -48,7 +55,7 @@ REQUESTS_FILE = os.path.join(os.path.dirname(__file__), "data", "requests.json")
 USERS_FILE = os.path.join(os.path.dirname(__file__), "data", "users.json")
 
 # In-memory state
-config = {"ebook": {}, "audiobook": {}}
+config = {"ebook": {}, "audiobook": {}, "ldap": {}}
 requests_history = []
 users = []
 lock = threading.Lock()
@@ -185,6 +192,61 @@ load_users()
 init_default_admin()
 
 
+# ─── LDAP Auth ───
+
+def _get_ldap_defaults():
+    return {
+        "enabled": False,
+        "server_url": "",
+        "bind_dn": "",
+        "bind_password": "",
+        "base_dn": "",
+        "user_search_filter": "(sAMAccountName={username})",
+        "default_role": "user",
+    }
+
+
+def try_ldap_auth(username, password):
+    """Attempt LDAP bind authentication.
+
+    Returns (success: bool, user_dn: str, error: str).
+    """
+    if not LDAP3_AVAILABLE:
+        return False, "", "ldap3 library is not installed"
+
+    ldap = config.get("ldap", {})
+    if not ldap.get("enabled"):
+        return False, "", "LDAP is not enabled"
+
+    server_url = ldap.get("server_url", "")
+    bind_dn = ldap.get("bind_dn", "")
+    bind_password = ldap.get("bind_password", "")
+    base_dn = ldap.get("base_dn", "")
+    search_filter = ldap.get("user_search_filter", "(sAMAccountName={username})")
+
+    if not server_url or not base_dn:
+        return False, "", "LDAP server_url or base_dn not configured"
+
+    search_filter = search_filter.replace("{username}", username)
+
+    try:
+        server = Server(server_url, get_info=ALL)
+        conn = Connection(server, bind_dn, bind_password, auto_bind=True)
+        conn.search(base_dn, search_filter, search_scope=SUBTREE)
+        if not conn.entries:
+            conn.unbind()
+            return False, "", "User not found in LDAP directory"
+        user_dn = conn.entries[0].entry_dn
+        conn.unbind()
+
+        # Attempt to bind as the user to verify their password
+        user_conn = Connection(server, user_dn, password, auto_bind=True)
+        user_conn.unbind()
+        return True, user_dn, ""
+    except Exception as e:
+        return False, "", str(e)
+
+
 def get_client(server_type: str) -> ReadarrClient | BookshelfClient | None:
     """Get a client for the given server type based on server_software setting."""
     server = config.get(server_type, {})
@@ -225,6 +287,29 @@ def api_login():
         if u["username"] == username and check_password_hash(u["password_hash"], password):
             login_user(User(u))
             return jsonify({"success": True, "username": u["username"], "role": u.get("role", "user")})
+
+    # Fall through to LDAP if configured
+    ldap = config.get("ldap", {})
+    if ldap.get("enabled"):
+        app.logger.info("LDAP enabled, attempting auth for '%s'", username)
+        success, _user_dn, error = try_ldap_auth(username, password)
+        app.logger.info("LDAP result: success=%s, dn=%s, error=%s", success, _user_dn, error)
+        if success:
+            existing = next((u for u in users if u["username"] == username), None)
+            if not existing:
+                existing = {
+                    "username": username,
+                    "password_hash": "ldap",
+                    "role": ldap.get("default_role", "user"),
+                    "created_at": datetime.utcnow().isoformat(),
+                }
+                users.append(existing)
+                save_users()
+            app.logger.info("About to call login_user for '%s'", username)
+            ok = login_user(User(existing))
+            app.logger.info("login_user returned %s for '%s'", ok, username)
+            return jsonify({"success": True, "username": existing["username"], "role": existing.get("role", "user")})
+        app.logger.info("LDAP auth failed for '%s': %s", username, error)
 
     return jsonify({"error": "Invalid username or password"}), 401
 
@@ -330,6 +415,68 @@ def delete_user(username):
 
     save_users()
     return jsonify({"success": True})
+
+
+# ─── LDAP Config API ───
+
+@app.route("/api/ldap", methods=["GET"])
+@admin_required
+def get_ldap():
+    ldap = config.get("ldap", _get_ldap_defaults())
+    return jsonify({
+        "enabled": ldap.get("enabled", False),
+        "server_url": ldap.get("server_url", ""),
+        "bind_dn": ldap.get("bind_dn", ""),
+        "bind_password": ldap.get("bind_password", ""),
+        "base_dn": ldap.get("base_dn", ""),
+        "user_search_filter": ldap.get("user_search_filter", "(sAMAccountName={username})"),
+        "default_role": ldap.get("default_role", "user"),
+    })
+
+
+@app.route("/api/ldap", methods=["POST"])
+@admin_required
+def update_ldap():
+    data = request.json
+    if data.get("default_role") not in ("admin", "user"):
+        return jsonify({"error": "Role must be 'admin' or 'user'"}), 400
+    config["ldap"] = {
+        "enabled": bool(data.get("enabled")),
+        "server_url": data.get("server_url", "").strip(),
+        "bind_dn": data.get("bind_dn", "").strip(),
+        "bind_password": data.get("bind_password", ""),
+        "base_dn": data.get("base_dn", "").strip(),
+        "user_search_filter": data.get("user_search_filter", "").strip() or "(sAMAccountName={username})",
+        "default_role": data.get("default_role", "user"),
+    }
+    save_config()
+    return jsonify({"success": True})
+
+
+@app.route("/api/ldap/test", methods=["POST"])
+@admin_required
+def test_ldap():
+    if not LDAP3_AVAILABLE:
+        return jsonify({"error": "ldap3 library is not installed"}), 400
+    data = request.json
+    server_url = data.get("server_url", "").strip()
+    bind_dn = data.get("bind_dn", "").strip()
+    bind_password = data.get("bind_password", "")
+    base_dn = data.get("base_dn", "").strip()
+    search_filter = data.get("user_search_filter", "").strip() or "(sAMAccountName={username})"
+
+    if not server_url or not base_dn:
+        return jsonify({"error": "server_url and base_dn are required"}), 400
+
+    try:
+        server = Server(server_url, get_info=ALL)
+        conn = Connection(server, bind_dn, bind_password, auto_bind=True)
+        test_filter = search_filter.replace("{username}", "test")
+        conn.search(base_dn, test_filter, search_scope=SUBTREE, size_limit=1)
+        conn.unbind()
+        return jsonify({"success": True, "message": "Connected to LDAP server successfully"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 # ─── Config API ───
