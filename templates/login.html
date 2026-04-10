@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Libreseerr - Login</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #111827;
+            --bg-secondary: #1f2937;
+            --bg-hover: #374151;
+            --pink-primary: #ec4899;
+            --pink-dark: #db2777;
+            --pink-glow: rgba(236, 72, 153, 0.3);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --border-color: #374151;
+            --error: #f87171;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-image: linear-gradient(135deg, #1a0a1e 0%, #111827 50%, #1f1028 100%);
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 24rem;
+            padding: 1.5rem;
+        }
+
+        .login-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            padding: 2rem;
+        }
+
+        .login-brand {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+        }
+
+        .login-logo {
+            width: 64px;
+            height: 64px;
+            border-radius: 12px;
+        }
+
+        .login-brand h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .login-brand p {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.35rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .form-group input {
+            width: 100%;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.625rem 0.75rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            outline: none;
+            font-family: inherit;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus {
+            border-color: var(--pink-primary);
+            box-shadow: 0 0 0 3px var(--pink-glow);
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 0.625rem;
+            background: linear-gradient(to bottom right, var(--pink-primary), var(--pink-dark));
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.2s;
+            margin-top: 0.5rem;
+        }
+
+        .login-btn:hover {
+            background: linear-gradient(to bottom right, var(--pink-dark), #9d174d);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .login-error {
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            color: var(--error);
+            padding: 0.625rem;
+            border-radius: 0.5rem;
+            font-size: 0.8rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .login-footer {
+            text-align: center;
+            margin-top: 1.5rem;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-brand">
+                <img src="/static/LibreseerrLogo.png" alt="Libreseerr" class="login-logo">
+                <h1>Libreseerr</h1>
+                <p>Sign in to your account</p>
+            </div>
+            <div id="login-error" class="login-error"></div>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="login-btn" id="login-btn">Sign In</button>
+            </form>
+        </div>
+        <div class="login-footer">Libreseerr &mdash; Book Request Management</div>
+    </div>
+    <script>
+        document.getElementById("login-form").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById("login-btn");
+            const errorEl = document.getElementById("login-error");
+            const username = document.getElementById("username").value.trim();
+            const password = document.getElementById("password").value;
+
+            btn.disabled = true;
+            btn.textContent = "Signing in...";
+            errorEl.style.display = "none";
+
+            try {
+                const resp = await fetch("/api/auth/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    window.location.href = "/";
+                } else {
+                    errorEl.textContent = data.error || "Login failed";
+                    errorEl.style.display = "block";
+                }
+            } catch (err) {
+                errorEl.textContent = "Connection error. Please try again.";
+                errorEl.style.display = "block";
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Sign In";
+            }
+        });
+    </script>
+</body>
+</html>

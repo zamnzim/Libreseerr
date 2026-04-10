@@ -5,13 +5,35 @@ import sys
 import threading
 import time
 from datetime import datetime
+from functools import wraps
 
 import requests as http_requests
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, redirect, url_for
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
 from bookshelf import BookshelfClient
 from readarr import ReadarrClient
 
 app = Flask(__name__)
+
+
+def _load_or_create_secret_key():
+    """Load secret key from env, or persist one to data/secret_key."""
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        return env_key
+    key_file = os.path.join(os.path.dirname(__file__), "data", "secret_key")
+    if os.path.exists(key_file):
+        with open(key_file) as f:
+            return f.read().strip()
+    os.makedirs(os.path.dirname(key_file), exist_ok=True)
+    key = os.urandom(32).hex()
+    with open(key_file, "w") as f:
+        f.write(key)
+    return key
+
+
+app.secret_key = _load_or_create_secret_key()
 
 # Configure logging to stdout so it shows in docker logs
 logging.basicConfig(
@@ -23,12 +45,78 @@ app.logger.setLevel(logging.DEBUG)
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "data", "config.json")
 REQUESTS_FILE = os.path.join(os.path.dirname(__file__), "data", "requests.json")
+USERS_FILE = os.path.join(os.path.dirname(__file__), "data", "users.json")
 
 # In-memory state
 config = {"ebook": {}, "audiobook": {}}
 requests_history = []
+users = []
 lock = threading.Lock()
 
+# ─── Flask-Login Setup ───
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login"
+
+
+class User:
+    """Flask-Login user wrapper."""
+
+    def __init__(self, data):
+        self._data = data
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_active(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    @property
+    def username(self):
+        return self._data["username"]
+
+    @property
+    def role(self):
+        return self._data.get("role", "user")
+
+    def get_id(self):
+        return self.username
+
+
+@login_manager.user_loader
+def load_user(username):
+    for u in users:
+        if u["username"] == username:
+            return User(u)
+    return None
+
+
+@login_manager.unauthorized_handler
+def handle_unauthorized():
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Authentication required"}), 401
+    return redirect(url_for("login"))
+
+
+def admin_required(f):
+    """Decorator: require admin role."""
+    @wraps(f)
+    @login_required
+    def decorated(*args, **kwargs):
+        if current_user.role != "admin":
+            return jsonify({"error": "Admin access required"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ─── Data Persistence ───
 
 def ensure_data_dir():
     data_dir = os.path.join(os.path.dirname(__file__), "data")
@@ -61,8 +149,40 @@ def load_requests():
             requests_history = json.load(f)
 
 
+def save_users():
+    ensure_data_dir()
+    # Strip password_hash before logging
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+
+
+def load_users():
+    global users
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE) as f:
+            users = json.load(f)
+
+
+def init_default_admin():
+    """Create a default admin account if no users exist."""
+    if not users:
+        users.append({
+            "username": "admin",
+            "password_hash": generate_password_hash("admin"),
+            "role": "admin",
+            "created_at": datetime.utcnow().isoformat(),
+        })
+        save_users()
+        app.logger.warning(
+            "Default admin account created (username: admin, password: admin). "
+            "Please change the password immediately!"
+        )
+
+
 load_config()
 load_requests()
+load_users()
+init_default_admin()
 
 
 def get_client(server_type: str) -> ReadarrClient | BookshelfClient | None:
@@ -75,16 +195,147 @@ def get_client(server_type: str) -> ReadarrClient | BookshelfClient | None:
     return None
 
 
-# ---------- Pages ----------
+# ─── Pages ───
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
 
-# ---------- Config API ----------
+@app.route("/login")
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
+# ─── Auth API ───
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_login():
+    data = request.json
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+
+    for u in users:
+        if u["username"] == username and check_password_hash(u["password_hash"], password):
+            login_user(User(u))
+            return jsonify({"success": True, "username": u["username"], "role": u.get("role", "user")})
+
+    return jsonify({"error": "Invalid username or password"}), 401
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+@login_required
+def api_logout():
+    logout_user()
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@login_required
+def api_me():
+    return jsonify({
+        "username": current_user.username,
+        "role": current_user.role,
+    })
+
+
+# ─── User Management API ───
+
+@app.route("/api/users", methods=["GET"])
+@admin_required
+def get_users():
+    safe_users = []
+    for u in users:
+        safe_users.append({
+            "username": u["username"],
+            "role": u.get("role", "user"),
+            "created_at": u.get("created_at", ""),
+        })
+    return jsonify(safe_users)
+
+
+@app.route("/api/users", methods=["POST"])
+@admin_required
+def create_user():
+    data = request.json
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    role = data.get("role", "user")
+
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+
+    if role not in ("admin", "user"):
+        return jsonify({"error": "Role must be 'admin' or 'user'"}), 400
+
+    for u in users:
+        if u["username"] == username:
+            return jsonify({"error": "Username already exists"}), 400
+
+    new_user = {
+        "username": username,
+        "password_hash": generate_password_hash(password),
+        "role": role,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    users.append(new_user)
+    save_users()
+    return jsonify({"success": True, "username": username, "role": role}), 201
+
+
+@app.route("/api/users/<username>", methods=["PUT"])
+@admin_required
+def update_user(username):
+    data = request.json
+
+    target = None
+    for u in users:
+        if u["username"] == username:
+            target = u
+            break
+
+    if not target:
+        return jsonify({"error": "User not found"}), 404
+
+    if "password" in data and data["password"]:
+        target["password_hash"] = generate_password_hash(data["password"])
+
+    if "role" in data:
+        if data["role"] not in ("admin", "user"):
+            return jsonify({"error": "Role must be 'admin' or 'user'"}), 400
+        target["role"] = data["role"]
+
+    save_users()
+    return jsonify({"success": True, "username": target["username"], "role": target.get("role", "user")})
+
+
+@app.route("/api/users/<username>", methods=["DELETE"])
+@admin_required
+def delete_user(username):
+    if username == current_user.username:
+        return jsonify({"error": "Cannot delete your own account"}), 400
+
+    global users
+    original_len = len(users)
+    users = [u for u in users if u["username"] != username]
+
+    if len(users) == original_len:
+        return jsonify({"error": "User not found"}), 404
+
+    save_users()
+    return jsonify({"success": True})
+
+
+# ─── Config API ───
 
 @app.route("/api/config", methods=["GET"])
+@login_required
 def get_config():
     return jsonify({
         "ebook": {
@@ -103,6 +354,7 @@ def get_config():
 
 
 @app.route("/api/config", methods=["POST"])
+@admin_required
 def update_config():
     data = request.json
     server_type = data.get("server_type")
@@ -119,6 +371,7 @@ def update_config():
 
 
 @app.route("/api/config/test", methods=["POST"])
+@admin_required
 def test_config():
     data = request.json
     url = data.get("url", "").strip()
@@ -137,9 +390,10 @@ def test_config():
         return jsonify({"error": str(e)}), 400
 
 
-# ---------- Search API (Open Library) ----------
+# ─── Search API (Open Library) ───
 
 @app.route("/api/search")
+@login_required
 def search_books():
     query = request.args.get("q", "").strip()
     if not query:
@@ -193,6 +447,7 @@ def search_books():
 
 
 @app.route("/api/profiles/<server_type>")
+@login_required
 def get_profiles(server_type):
     client = get_client(server_type)
     if not client:
@@ -205,6 +460,7 @@ def get_profiles(server_type):
 
 
 @app.route("/api/rootfolders/<server_type>")
+@login_required
 def get_root_folders(server_type):
     client = get_client(server_type)
     if not client:
@@ -216,9 +472,10 @@ def get_root_folders(server_type):
         return jsonify({"error": str(e)}), 500
 
 
-# ---------- Download / Request API ----------
+# ─── Download / Request API ───
 
 @app.route("/api/request", methods=["POST"])
+@login_required
 def create_request():
     data = request.json
     server_type = data.get("server_type")
@@ -276,7 +533,7 @@ def create_request():
             )
             request_entry["status"] = "processing"
         else:
-            # Fallback: build data from Google Books
+            # Fallback: build data from Open Library
             readarr_book = {
                 "title": title,
                 "author": {
@@ -302,12 +559,14 @@ def create_request():
 
 
 @app.route("/api/requests", methods=["GET"])
+@login_required
 def get_requests():
     with lock:
         return jsonify(requests_history)
 
 
 @app.route("/api/requests/refresh", methods=["POST"])
+@login_required
 def refresh_requests():
     """Refresh the status of all processing/downloading requests."""
     with lock:
@@ -357,6 +616,7 @@ def refresh_requests():
 
 
 @app.route("/api/requests/<int:request_id>", methods=["DELETE"])
+@login_required
 def delete_request(request_id):
     with lock:
         global requests_history

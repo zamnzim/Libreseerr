@@ -1,8 +1,55 @@
 // State
 let currentModalBook = null;
 let selectedServer = "ebook";
+let currentUser = null;
+let editingUsername = null;
 
-// Sidebar
+// ─── Auth ───
+
+async function loadCurrentUser() {
+    try {
+        const resp = await fetch("/api/auth/me");
+        if (resp.status === 401) {
+            window.location.href = "/login";
+            return;
+        }
+        currentUser = await resp.json();
+
+        // Show admin-only elements if user is admin
+        if (currentUser.role === "admin") {
+            document.body.classList.add("is-admin");
+        }
+
+        // Set sidebar user info
+        document.getElementById("sidebar-username").textContent = currentUser.username;
+        document.getElementById("sidebar-role").textContent = currentUser.role;
+    } catch (err) {
+        window.location.href = "/login";
+    }
+}
+
+async function doLogout() {
+    try {
+        await fetch("/api/auth/logout", { method: "POST" });
+    } catch (err) {
+        // ignore
+    }
+    window.location.href = "/login";
+}
+
+// ─── 401 Interceptor ───
+
+const originalFetch = window.fetch;
+window.fetch = async function (...args) {
+    const resp = await originalFetch.apply(this, args);
+    if (resp.status === 401) {
+        window.location.href = "/login";
+    }
+    return resp;
+};
+
+// ─── Sidebar ───
+
 function openSidebar() {
     document.getElementById("sidebar").classList.add("open");
     document.getElementById("sidebar-overlay").classList.add("active");
@@ -13,7 +60,8 @@ function closeSidebar() {
     document.getElementById("sidebar-overlay").classList.remove("active");
 }
 
-// Navigation
+// ─── Navigation ───
+
 document.querySelectorAll(".sidebar-link").forEach((link) => {
     link.addEventListener("click", (e) => {
         e.preventDefault();
@@ -24,11 +72,13 @@ document.querySelectorAll(".sidebar-link").forEach((link) => {
         document.getElementById(pageId).classList.add("active");
         if (link.dataset.page === "requests") loadRequests();
         if (link.dataset.page === "settings") loadConfig();
+        if (link.dataset.page === "users") loadUsers();
         closeSidebar();
     });
 });
 
-// Search
+// ─── Search ───
+
 const searchInput = document.getElementById("search-input");
 
 searchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
@@ -102,7 +152,8 @@ function renderBookCard(book) {
         </div>`;
 }
 
-// Download Modal
+// ─── Download Modal ───
+
 async function openDownloadModal(book) {
     currentModalBook = book;
     selectedServer = "ebook";
@@ -209,7 +260,8 @@ document.getElementById("confirm-download-btn").addEventListener("click", async 
     }
 });
 
-// Requests
+// ─── Requests ───
+
 async function loadRequests() {
     const list = document.getElementById("requests-list");
     try {
@@ -235,7 +287,6 @@ async function loadRequests() {
 
 function renderRequest(req) {
     const cover = req.cover_url || "https://via.placeholder.com/50x75/1f2937/ec4899?text=N/A";
-    const statusClass = req.status;
     const progress = req.progress || 0;
     const fillClass = req.status === "completed" ? "complete" : req.status === "error" ? "error" : "";
 
@@ -287,7 +338,8 @@ document.getElementById("refresh-btn").addEventListener("click", async () => {
     }
 });
 
-// Settings
+// ─── Settings ───
+
 async function loadConfig() {
     try {
         const resp = await fetch("/api/config");
@@ -355,14 +407,174 @@ window.testConnection = async function (type) {
     }
 };
 
-// Close modal on background click
+// ─── User Management ───
+
+async function loadUsers() {
+    const list = document.getElementById("users-list");
+    try {
+        const resp = await fetch("/api/users");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.length) {
+            list.innerHTML = '<div class="empty-state">No users found</div>';
+            return;
+        }
+        list.innerHTML = data.map(renderUser).join("");
+        list.querySelectorAll(".edit-user-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                openEditUserModal(btn.dataset.username, btn.dataset.role);
+            });
+        });
+        list.querySelectorAll(".delete-user-btn").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+                if (!confirm("Delete user '" + btn.dataset.username + "'?")) return;
+                try {
+                    const resp = await fetch("/api/users/" + encodeURIComponent(btn.dataset.username), {
+                        method: "DELETE",
+                    });
+                    const data = await resp.json();
+                    if (data.error) {
+                        alert(data.error);
+                    } else {
+                        loadUsers();
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+            });
+        });
+    } catch (err) {
+        list.innerHTML = '<div class="empty-state">Error loading users</div>';
+    }
+}
+
+function renderUser(user) {
+    const initial = user.username.charAt(0);
+    const createdDate = user.created_at ? new Date(user.created_at).toLocaleDateString() : "Unknown";
+    const isSelf = currentUser && user.username === currentUser.username;
+    const deleteDisabled = isSelf ? "disabled" : "";
+    const deleteStyle = isSelf ? 'style="opacity:0.4;cursor:not-allowed;"' : "";
+
+    return `
+        <div class="user-item">
+            <div class="user-avatar">${initial}</div>
+            <div class="user-details">
+                <div class="user-name">${user.username}${isSelf ? " (you)" : ""}</div>
+                <div class="user-meta">Created ${createdDate}</div>
+            </div>
+            <span class="user-role-badge ${user.role}">${user.role}</span>
+            <div class="user-actions">
+                <button class="btn btn-small btn-secondary edit-user-btn"
+                        data-username="${user.username}" data-role="${user.role}">Edit</button>
+                <button class="btn btn-small btn-danger delete-user-btn"
+                        data-username="${user.username}" ${deleteDisabled} ${deleteStyle}>Delete</button>
+            </div>
+        </div>`;
+}
+
+function openAddUserModal() {
+    editingUsername = null;
+    document.getElementById("user-modal-title").textContent = "Add User";
+    document.getElementById("user-modal-username").value = "";
+    document.getElementById("user-modal-username").disabled = false;
+    document.getElementById("user-modal-password").value = "";
+    document.getElementById("user-modal-role").value = "user";
+    document.getElementById("user-modal-error").style.display = "none";
+    document.getElementById("user-modal").classList.add("active");
+}
+
+function openEditUserModal(username, role) {
+    editingUsername = username;
+    document.getElementById("user-modal-title").textContent = "Edit User";
+    document.getElementById("user-modal-username").value = username;
+    document.getElementById("user-modal-username").disabled = true;
+    document.getElementById("user-modal-password").value = "";
+    document.getElementById("user-modal-password").placeholder = "Leave blank to keep current password";
+    document.getElementById("user-modal-role").value = role;
+    document.getElementById("user-modal-error").style.display = "none";
+    document.getElementById("user-modal").classList.add("active");
+}
+
+function closeUserModal() {
+    document.getElementById("user-modal").classList.remove("active");
+    document.getElementById("user-modal-password").placeholder = "Enter password";
+    editingUsername = null;
+}
+
+window.saveUserModal = async function () {
+    const username = document.getElementById("user-modal-username").value.trim();
+    const password = document.getElementById("user-modal-password").value;
+    const role = document.getElementById("user-modal-role").value;
+    const errorEl = document.getElementById("user-modal-error");
+    const btn = document.getElementById("user-modal-save-btn");
+
+    errorEl.style.display = "none";
+
+    if (!username) {
+        errorEl.textContent = "Username is required";
+        errorEl.style.display = "block";
+        return;
+    }
+
+    if (!editingUsername && !password) {
+        errorEl.textContent = "Password is required for new users";
+        errorEl.style.display = "block";
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+
+    try {
+        let resp;
+        if (editingUsername) {
+            // Edit existing user
+            const body = { role };
+            if (password) body.password = password;
+            resp = await fetch("/api/users/" + encodeURIComponent(editingUsername), {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+        } else {
+            // Create new user
+            resp = await fetch("/api/users", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password, role }),
+            });
+        }
+
+        const data = await resp.json();
+        if (data.error) {
+            errorEl.textContent = data.error;
+            errorEl.style.display = "block";
+        } else {
+            closeUserModal();
+            loadUsers();
+        }
+    } catch (err) {
+        errorEl.textContent = "Error: " + err.message;
+        errorEl.style.display = "block";
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Save";
+    }
+};
+
+// Close modals on background click
 document.getElementById("download-modal").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeModal();
 });
+document.getElementById("user-modal").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeUserModal();
+});
 
-// Load config on page load
-loadConfig();
+// ─── Init ───
 
-// Show initial empty state
-document.getElementById("search-results").innerHTML =
-    '<div class="empty-state">Search for books by title, author, or ISBN</div>';
+// Load current user first, then the rest
+loadCurrentUser().then(() => {
+    loadConfig();
+    document.getElementById("search-results").innerHTML =
+        '<div class="empty-state">Search for books by title, author, or ISBN</div>';
+});
