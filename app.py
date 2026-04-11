@@ -166,8 +166,11 @@ def save_users():
 def load_users():
     global users
     if os.path.exists(USERS_FILE):
-        with open(USERS_FILE) as f:
-            users = json.load(f)
+        try:
+            with open(USERS_FILE) as f:
+                users = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
 
 
 def init_default_admin():
