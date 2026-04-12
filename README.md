@@ -79,6 +79,8 @@ Libreseerr is available as a TrueNAS SCALE app from this repository.
 
 The app will be accessible at `http://<your-truenas-ip>:50000`.
 
+Note: TrueNAS does not auto-pull new latest images and users need to update manually via Apps > Update.
+
 ## Configuration
 
 On first launch, a default admin account is created with the following credentials:
