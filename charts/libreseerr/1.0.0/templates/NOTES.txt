@@ -1,0 +1,10 @@
+Libreseerr has been deployed!
+
+Access the web interface at:
+  http://<your-node-ip>:{{ .Values.webPort }}
+
+Default login:
+  Username: admin
+  Password: admin
+
+IMPORTANT: Change the default admin password immediately after first login.

@@ -44,7 +44,7 @@ docker run -d \
 ```yaml
 services:
   libreseerr:
-    iimage: ghcr.io/zamnzim/libreseerr:latest
+    image: ghcr.io/zamnzim/libreseerr:latest
     ports:
       - "5000:5000"
     volumes:
@@ -62,6 +62,22 @@ docker compose up -d
 ```
 
 The application will be available at `http://<your-host>:5000`.
+
+### TrueNAS Scale
+
+Libreseerr is available as a TrueNAS SCALE app from this repository.
+
+1. In the TrueNAS web UI, go to **Apps** > **Settings** > **Add Catalog**.
+2. Enter the repository URL: `https://github.com/zamnzim/Libreseerr`
+3. Set the **Preferred Train** to `stable`.
+4. Navigate to **Available Applications**, find **Libreseerr**, and click **Install**.
+5. Configure the app through the UI:
+   - **Libreseerr Configuration** — image settings, secret key, and timezone
+   - **Storage** — choose `ixVolume` (managed) or `hostPath` (custom directory) for persistent data
+   - **Networking** — set the web port (default 50000)
+6. Click **Install** and wait for the app to deploy.
+
+The app will be accessible at `http://<your-truenas-ip>:50000`.
 
 ## Configuration
 

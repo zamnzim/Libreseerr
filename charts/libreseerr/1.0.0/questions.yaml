@@ -1,0 +1,100 @@
+groups:
+  - name: "Libreseerr Configuration"
+    description: "Configure the Libreseerr application"
+  - name: "Storage"
+    description: "Configure storage for the application"
+  - name: "Networking"
+    description: "Configure networking for the application"
+
+questions:
+  - variable: image
+    label: "Image"
+    group: "Libreseerr Configuration"
+    schema:
+      type: dict
+      attrs:
+        - variable: repository
+          label: "Image Repository"
+          schema:
+            type: string
+            default: "ghcr.io/zamnzim/libreseerr"
+        - variable: tag
+          label: "Image Tag"
+          schema:
+            type: string
+            default: "latest"
+        - variable: pullPolicy
+          label: "Pull Policy"
+          schema:
+            type: string
+            default: "IfNotPresent"
+            enum:
+              - value: "IfNotPresent"
+                description: "IfNotPresent"
+              - value: "Always"
+                description: "Always"
+              - value: "Never"
+                description: "Never"
+
+  - variable: secretKey
+    label: "Secret Key"
+    description: "Flask session secret key. Leave blank to auto-generate."
+    group: "Libreseerr Configuration"
+    schema:
+      type: string
+      default: ""
+
+  - variable: timezone
+    label: "Timezone"
+    description: "Set the container timezone (e.g. America/New_York)"
+    group: "Libreseerr Configuration"
+    schema:
+      type: string
+      default: "Etc/UTC"
+
+  - variable: webPort
+    label: "Web Port"
+    description: "Port for the Libreseerr web interface"
+    group: "Networking"
+    schema:
+      type: int
+      default: 50000
+      min: 9000
+      max: 65535
+
+  - variable: storage
+    label: "Storage"
+    group: "Storage"
+    schema:
+      type: dict
+      attrs:
+        - variable: config
+          label: "Config Storage"
+          description: "Persistent storage for application data (config, users, requests)"
+          schema:
+            type: dict
+            attrs:
+              - variable: type
+                label: "Type"
+                schema:
+                  type: string
+                  default: "ixVolume"
+                  enum:
+                    - value: "hostPath"
+                      description: "Host Path"
+                    - value: "ixVolume"
+                      description: "ixVolume"
+              - variable: hostPath
+                label: "Host Path"
+                schema:
+                  type: hostpath
+                  show_if:
+                    - variable: type
+                      op: "="
+                      value: "hostPath"
+              - variable: mountPath
+                label: "Mount Path"
+                schema:
+                  type: string
+                  default: "/app/data"
+                  editable: false

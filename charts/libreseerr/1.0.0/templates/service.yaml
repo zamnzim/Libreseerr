@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "libreseerr.fullname" . }}
+  labels:
+    {{- include "libreseerr.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  ports:
+    - port: 5000
+      targetPort: http
+      nodePort: {{ .Values.webPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "libreseerr.selectorLabels" . | nindent 4 }}

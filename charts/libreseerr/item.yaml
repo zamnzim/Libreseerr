@@ -1,0 +1,11 @@
+name: "libreseerr"
+categories:
+  - media
+tags:
+  - books
+  - requests
+  - readarr
+  - bookshelf
+screenshots: []
+app_readme: "Libreseerr is a book request management application for Readarr and Readarr forks like Bookshelf."
+appVersion: "1.0.0"

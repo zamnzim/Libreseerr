@@ -1,0 +1,16 @@
+image:
+  repository: ghcr.io/zamnzim/libreseerr
+  tag: latest
+  pullPolicy: IfNotPresent
+
+webPort: 50000
+
+secretKey: ""
+
+timezone: "Etc/UTC"
+
+storage:
+  config:
+    type: "ixVolume"
+    hostPath: ""
+    mountPath: "/app/data"

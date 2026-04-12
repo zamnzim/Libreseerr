@@ -1,0 +1,15 @@
+{{- if eq .Values.storage.config.type "ixVolume" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "libreseerr.fullname" . }}-config
+  labels:
+    {{- include "libreseerr.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: ix-storage-class
+{{- end }}
