@@ -20,6 +20,7 @@ except ImportError:
 
 from bookshelf import BookshelfClient
 from readarr import ReadarrClient
+from lazylibrarian import LazyLibrarianClient
 
 app = Flask(__name__)
 
@@ -250,12 +251,14 @@ def try_ldap_auth(username, password):
         return False, "", str(e)
 
 
-def get_client(server_type: str) -> ReadarrClient | BookshelfClient | None:
+def get_client(server_type: str) -> ReadarrClient | BookshelfClient | LazyLibrarianClient | None:
     """Get a client for the given server type based on server_software setting."""
     server = config.get(server_type, {})
     if server.get("url") and server.get("api_key"):
         if server.get("server_software") == "bookshelf":
             return BookshelfClient(server["url"], server["api_key"])
+        if server.get("server_software") == "lazylibrarian":
+            return LazyLibrarianClient(server["url"], server["api_key"])
         return ReadarrClient(server["url"], server["api_key"])
     return None
 
@@ -532,6 +535,8 @@ def test_config():
         server_software = data.get("server_software", "readarr")
         if server_software == "bookshelf":
             client = BookshelfClient(url, api_key)
+        elif server_software == "lazylibrarian":
+            client = LazyLibrarianClient(url, api_key)
         else:
             client = ReadarrClient(url, api_key)
         status = client.test_connection()
