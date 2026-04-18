@@ -3,6 +3,7 @@ let currentModalBook = null;
 let selectedServer = "ebook";
 let currentUser = null;
 let editingUsername = null;
+let serverConfig = { ebook: { configured: false }, audiobook: { configured: false } };
 
 // ─── Auth ───
 
@@ -156,10 +157,15 @@ function renderBookCard(book) {
 
 async function openDownloadModal(book) {
     currentModalBook = book;
-    selectedServer = "ebook";
+
+    // Only show buttons for configured servers
+    const configuredServers = ["ebook", "audiobook"].filter((s) => serverConfig[s]?.configured);
+    selectedServer = configuredServers[0] || "ebook";
 
     document.getElementById("modal-title").textContent = "Download: " + (book.title || "Unknown");
     document.querySelectorAll(".server-btn").forEach((btn) => {
+        const configured = serverConfig[btn.dataset.server]?.configured;
+        btn.style.display = configured ? "" : "none";
         btn.classList.toggle("active", btn.dataset.server === selectedServer);
         btn.onclick = () => selectServer(btn.dataset.server);
     });
@@ -198,8 +204,9 @@ async function loadModalOptions(server) {
         if (profiles.error) {
             profileSelect.innerHTML = `<option disabled>${profiles.error}</option>`;
         } else {
+            const defaultId = server === "audiobook" ? localStorage.getItem("defaultAudiobookProfileId") : null;
             profileSelect.innerHTML = profiles
-                .map((p) => `<option value="${p.id}">${p.name}</option>`)
+                .map((p) => `<option value="${p.id}" ${String(p.id) === defaultId ? "selected" : ""}>${p.name}</option>`)
                 .join("");
         }
 
@@ -344,16 +351,49 @@ async function loadConfig() {
     try {
         const resp = await fetch("/api/config");
         const data = await resp.json();
+        serverConfig = data;
         document.getElementById("ebook-url").value = data.ebook.url || "";
         document.getElementById("ebook-api").value = data.ebook.api_key || "";
         document.getElementById("audiobook-url").value = data.audiobook.url || "";
         document.getElementById("audiobook-api").value = data.audiobook.api_key || "";
         document.getElementById("ebook-server-software").value = data.ebook.server_software || "readarr";
         document.getElementById("audiobook-server-software").value = data.audiobook.server_software || "readarr";
+        await loadDefaultProfileOptions();
     } catch (err) {
         console.error("Failed to load config", err);
     }
 }
+
+async function loadDefaultProfileOptions() {
+    const select = document.getElementById("audiobook-default-profile");
+    if (!select || !serverConfig.audiobook?.configured) {
+        if (select) select.innerHTML = '<option value="">— server not configured —</option>';
+        return;
+    }
+    try {
+        const resp = await fetch("/api/profiles/audiobook");
+        const profiles = await resp.json();
+        const saved = localStorage.getItem("defaultAudiobookProfileId");
+        select.innerHTML = '<option value="">No default</option>' +
+            profiles.map((p) => `<option value="${p.id}" ${String(p.id) === saved ? "selected" : ""}>${p.name}</option>`).join("");
+    } catch {
+        select.innerHTML = '<option value="">Error loading profiles</option>';
+    }
+}
+
+window.saveDefaultProfile = function () {
+    const select = document.getElementById("audiobook-default-profile");
+    const value = select.value;
+    if (value) {
+        localStorage.setItem("defaultAudiobookProfileId", value);
+    } else {
+        localStorage.removeItem("defaultAudiobookProfileId");
+    }
+    const btn = select.nextElementSibling;
+    const orig = btn.textContent;
+    btn.textContent = "Saved!";
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+};
 
 window.saveConfig = async function (type) {
     const url = document.getElementById(type + "-url").value;

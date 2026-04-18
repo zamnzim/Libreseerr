@@ -142,6 +142,13 @@
                             <button class="btn btn-primary" onclick="saveConfig('audiobook')">Save</button>
                         </div>
                         <div id="audiobook-status" class="status-msg"></div>
+                        <div class="form-group" style="margin-top:1rem">
+                            <label for="audiobook-default-profile">Default Quality Profile</label>
+                            <select id="audiobook-default-profile">
+                                <option value="">— server not configured —</option>
+                            </select>
+                            <button class="btn btn-primary" style="margin-top:0.5rem" onclick="saveDefaultProfile()">Save Default</button>
+                        </div>
                     </div>
                 </div>
             </div>
