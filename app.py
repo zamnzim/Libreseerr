@@ -100,6 +100,7 @@ class User:
 
 @login_manager.user_loader
 def load_user(username):
+    load_users()
     for u in users:
         if u["username"] == username:
             return User(u)
@@ -140,8 +141,11 @@ def save_config():
 def load_config():
     global config
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            config = json.load(f)
+        try:
+            with open(CONFIG_FILE) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
 
 
 def save_requests():
@@ -253,6 +257,7 @@ def try_ldap_auth(username, password):
 
 def get_client(server_type: str) -> ReadarrClient | BookshelfClient | LazyLibrarianClient | None:
     """Get a client for the given server type based on server_software setting."""
+    load_config()
     server = config.get(server_type, {})
     if server.get("url") and server.get("api_key"):
         if server.get("server_software") == "bookshelf":
@@ -282,6 +287,7 @@ def login():
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
+    load_users()
     data = request.json
     username = data.get("username", "").strip()
     password = data.get("password", "")
@@ -341,6 +347,7 @@ def api_me():
 @app.route("/api/users", methods=["GET"])
 @admin_required
 def get_users():
+    load_users()
     safe_users = []
     for u in users:
         safe_users.append({
@@ -428,6 +435,7 @@ def delete_user(username):
 @app.route("/api/ldap", methods=["GET"])
 @admin_required
 def get_ldap():
+    load_config()
     ldap = config.get("ldap", _get_ldap_defaults())
     return jsonify({
         "enabled": ldap.get("enabled", False),
@@ -490,6 +498,7 @@ def test_ldap():
 @app.route("/api/config", methods=["GET"])
 @login_required
 def get_config():
+    load_config()
     return jsonify({
         "ebook": {
             "url": config["ebook"].get("url", ""),
@@ -717,6 +726,7 @@ def create_request():
 @login_required
 def get_requests():
     with lock:
+        load_requests()
         return jsonify(requests_history)
 
 
