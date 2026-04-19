@@ -305,3 +305,14 @@ class BookshelfClient:
         resp.raise_for_status()
         data = resp.json()
         return data.get("records", data) if isinstance(data, dict) else data
+
+    def get_downloaded_titles(self) -> set:
+        """Return a set of lowercase titles that have at least one file on disk."""
+        resp = self.session.get(self._url("/book"), timeout=30)
+        resp.raise_for_status()
+        books = resp.json()
+        return {
+            b["title"].lower()
+            for b in books
+            if b.get("statistics", {}).get("bookFileCount", 0) > 0
+        }
