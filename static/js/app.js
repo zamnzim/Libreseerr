@@ -3,9 +3,6 @@ let currentModalBook = null;
 let selectedServer = "ebook";
 let currentUser = null;
 let editingUsername = null;
-let serverConfig = { ebook: { configured: false }, audiobook: { configured: false } };
-let requestsByTitle = {}; // lowercase title → request status (libreseerr history)
-let downloadedTitles = new Set(); // lowercase titles confirmed downloaded in Readarr/Bookshelf
 
 // ─── Auth ───
 
@@ -121,9 +118,7 @@ async function doSearch() {
         }
         grid.innerHTML = data.map(renderBookCard).join("");
         grid.querySelectorAll(".book-card").forEach((card) => {
-            const book = JSON.parse(card.dataset.book);
-            if (downloadedTitles.has(book.title?.toLowerCase())) return; // already in library
-            card.addEventListener("click", () => openDownloadModal(book));
+            card.addEventListener("click", () => openDownloadModal(JSON.parse(card.dataset.book)));
         });
     } catch (err) {
         grid.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
@@ -141,19 +136,8 @@ function renderBookCard(book) {
     if (!cover) cover = "https://via.placeholder.com/200x300/1f2937/ec4899?text=No+Cover";
     const bookJson = JSON.stringify(book).replace(/"/g, "&quot;");
 
-    const key = title.toLowerCase();
-    const isDownloaded = downloadedTitles.has(key);
-    const requestStatus = !isDownloaded ? requestsByTitle[key] : null;
-    const statusBadge = isDownloaded
-        ? '<div class="book-status-badge downloaded">Downloaded</div>'
-        : requestStatus
-        ? `<div class="book-status-badge in-progress">${requestStatus.charAt(0).toUpperCase() + requestStatus.slice(1)}</div>`
-        : "";
-    const cardClass = isDownloaded ? "book-card book-card--downloaded" : "book-card";
-
     return `
-        <div class="${cardClass}" data-book="${bookJson}">
-            ${statusBadge}
+        <div class="book-card" data-book="${bookJson}">
             <img class="book-cover" src="${cover}" alt="${title}" loading="lazy"
                  onerror="this.src='https://via.placeholder.com/200x300/1f2937/ec4899?text=No+Cover'">
             <div class="book-overlay">
@@ -172,15 +156,10 @@ function renderBookCard(book) {
 
 async function openDownloadModal(book) {
     currentModalBook = book;
-
-    // Only show buttons for configured servers
-    const configuredServers = ["ebook", "audiobook"].filter((s) => serverConfig[s]?.configured);
-    selectedServer = configuredServers[0] || "ebook";
+    selectedServer = "ebook";
 
     document.getElementById("modal-title").textContent = "Download: " + (book.title || "Unknown");
     document.querySelectorAll(".server-btn").forEach((btn) => {
-        const configured = serverConfig[btn.dataset.server]?.configured;
-        btn.style.display = configured ? "" : "none";
         btn.classList.toggle("active", btn.dataset.server === selectedServer);
         btn.onclick = () => selectServer(btn.dataset.server);
     });
@@ -219,9 +198,8 @@ async function loadModalOptions(server) {
         if (profiles.error) {
             profileSelect.innerHTML = `<option disabled>${profiles.error}</option>`;
         } else {
-            const defaultId = server === "audiobook" ? localStorage.getItem("defaultAudiobookProfileId") : null;
             profileSelect.innerHTML = profiles
-                .map((p) => `<option value="${p.id}" ${String(p.id) === defaultId ? "selected" : ""}>${p.name}</option>`)
+                .map((p) => `<option value="${p.id}">${p.name}</option>`)
                 .join("");
         }
 
@@ -270,8 +248,6 @@ document.getElementById("confirm-download-btn").addEventListener("click", async 
         if (data.error) {
             alert("Error: " + data.error);
         } else {
-            const titleKey = data.title?.toLowerCase();
-            if (titleKey) requestsByTitle[titleKey] = data.status || "processing";
             closeModal();
             // Switch to requests page
             document.querySelector('[data-page="requests"]').click();
@@ -291,8 +267,6 @@ async function loadRequests() {
     try {
         const resp = await fetch("/api/requests");
         const data = await resp.json();
-        requestsByTitle = {};
-        data.forEach((r) => { requestsByTitle[r.title.toLowerCase()] = r.status; });
         if (!data.length) {
             list.innerHTML = '<div class="empty-state">No requests yet. Search for books and download them!</div>';
             return;
@@ -370,49 +344,16 @@ async function loadConfig() {
     try {
         const resp = await fetch("/api/config");
         const data = await resp.json();
-        serverConfig = data;
         document.getElementById("ebook-url").value = data.ebook.url || "";
         document.getElementById("ebook-api").value = data.ebook.api_key || "";
         document.getElementById("audiobook-url").value = data.audiobook.url || "";
         document.getElementById("audiobook-api").value = data.audiobook.api_key || "";
         document.getElementById("ebook-server-software").value = data.ebook.server_software || "readarr";
         document.getElementById("audiobook-server-software").value = data.audiobook.server_software || "readarr";
-        await loadDefaultProfileOptions();
     } catch (err) {
         console.error("Failed to load config", err);
     }
 }
-
-async function loadDefaultProfileOptions() {
-    const select = document.getElementById("audiobook-default-profile");
-    if (!select || !serverConfig.audiobook?.configured) {
-        if (select) select.innerHTML = '<option value="">— server not configured —</option>';
-        return;
-    }
-    try {
-        const resp = await fetch("/api/profiles/audiobook");
-        const profiles = await resp.json();
-        const saved = localStorage.getItem("defaultAudiobookProfileId");
-        select.innerHTML = '<option value="">No default</option>' +
-            profiles.map((p) => `<option value="${p.id}" ${String(p.id) === saved ? "selected" : ""}>${p.name}</option>`).join("");
-    } catch {
-        select.innerHTML = '<option value="">Error loading profiles</option>';
-    }
-}
-
-window.saveDefaultProfile = function () {
-    const select = document.getElementById("audiobook-default-profile");
-    const value = select.value;
-    if (value) {
-        localStorage.setItem("defaultAudiobookProfileId", value);
-    } else {
-        localStorage.removeItem("defaultAudiobookProfileId");
-    }
-    const btn = select.nextElementSibling;
-    const orig = btn.textContent;
-    btn.textContent = "Saved!";
-    setTimeout(() => { btn.textContent = orig; }, 1500);
-};
 
 window.saveConfig = async function (type) {
     const url = document.getElementById(type + "-url").value;
@@ -710,21 +651,9 @@ window.testLDAP = async function () {
 
 // ─── Init ───
 
-async function loadLibrary() {
-    try {
-        const resp = await fetch("/api/library");
-        const titles = await resp.json();
-        downloadedTitles = new Set(titles);
-    } catch {
-        // non-fatal — badges just won't show
-    }
-}
-
 // Load current user first, then the rest
 loadCurrentUser().then(() => {
     loadConfig();
-    loadRequests();
-    loadLibrary();
     document.getElementById("search-results").innerHTML =
         '<div class="empty-state">Search for books by title, author, or ISBN</div>';
 });

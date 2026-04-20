@@ -100,7 +100,6 @@ class User:
 
 @login_manager.user_loader
 def load_user(username):
-    load_users()
     for u in users:
         if u["username"] == username:
             return User(u)
@@ -141,11 +140,8 @@ def save_config():
 def load_config():
     global config
     if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE) as f:
-                config = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
+        with open(CONFIG_FILE) as f:
+            config = json.load(f)
 
 
 def save_requests():
@@ -257,7 +253,6 @@ def try_ldap_auth(username, password):
 
 def get_client(server_type: str) -> ReadarrClient | BookshelfClient | LazyLibrarianClient | None:
     """Get a client for the given server type based on server_software setting."""
-    load_config()
     server = config.get(server_type, {})
     if server.get("url") and server.get("api_key"):
         if server.get("server_software") == "bookshelf":
@@ -287,7 +282,6 @@ def login():
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
-    load_users()
     data = request.json
     username = data.get("username", "").strip()
     password = data.get("password", "")
@@ -347,7 +341,6 @@ def api_me():
 @app.route("/api/users", methods=["GET"])
 @admin_required
 def get_users():
-    load_users()
     safe_users = []
     for u in users:
         safe_users.append({
@@ -435,7 +428,6 @@ def delete_user(username):
 @app.route("/api/ldap", methods=["GET"])
 @admin_required
 def get_ldap():
-    load_config()
     ldap = config.get("ldap", _get_ldap_defaults())
     return jsonify({
         "enabled": ldap.get("enabled", False),
@@ -498,7 +490,6 @@ def test_ldap():
 @app.route("/api/config", methods=["GET"])
 @login_required
 def get_config():
-    load_config()
     return jsonify({
         "ebook": {
             "url": config["ebook"].get("url", ""),
@@ -530,22 +521,6 @@ def update_config():
     }
     save_config()
     return jsonify({"success": True})
-
-
-@app.route("/api/library")
-@login_required
-def get_library():
-    """Return the set of downloaded book titles across all configured servers."""
-    titles = set()
-    for server_type in ("ebook", "audiobook"):
-        client = get_client(server_type)
-        if not client:
-            continue
-        try:
-            titles |= client.get_downloaded_titles()
-        except Exception as e:
-            app.logger.warning("Failed to fetch library for %s: %s", server_type, e)
-    return jsonify(list(titles))
 
 
 @app.route("/api/config/test", methods=["POST"])
@@ -690,38 +665,40 @@ def create_request():
     }
 
     try:
-        # Try to find the book via the configured server's own lookup.
-        # The server requires its own metadata ID (e.g. Goodreads) as
-        # foreignBookId — Open Library IDs will always be rejected.
+        # First, try to find the book in Readarr via ISBN lookup
         readarr_books = []
         if isbn:
             readarr_books = client.lookup_by_isbn(isbn)
         if not readarr_books:
             readarr_books = client.search_books(f"{title} {author_name}")
-        if not readarr_books:
-            # Retry with title only — combined queries sometimes miss
-            readarr_books = client.search_books(title)
 
-        if not readarr_books:
-            raise ValueError(
-                f"'{title}' by {author_name} was not found in the configured "
-                f"server's catalog. Try searching for it directly in your "
-                f"Readarr/Bookshelf instance to confirm it's available."
+        if readarr_books:
+            # Use the full Readarr lookup result — it has the correct
+            # editions, images, links, etc. that Readarr expects.
+            # We only override the author if Readarr returned empty data.
+            readarr_book = readarr_books[0]
+            if not readarr_book.get("author", {}).get("authorName"):
+                readarr_book["author"] = {
+                    "authorName": author_name,
+                    "foreignAuthorId": "",
+                }
+            app.logger.info(
+                "Readarr match for '%s': title='%s', author=%s",
+                title, readarr_book.get("title"), json.dumps(readarr_book.get("author", {})),
             )
-
-        # Use the full server lookup result — it has the correct metadata
-        # IDs, editions, images, etc. that the server expects.
-        readarr_book = readarr_books[0]
-        if not readarr_book.get("author", {}).get("authorName"):
-            readarr_book["author"] = {
-                "authorName": author_name,
-                "foreignAuthorId": "",
+            request_entry["status"] = "processing"
+        else:
+            # Fallback: build data from Open Library
+            readarr_book = {
+                "title": title,
+                "author": {
+                    "authorName": author_name,
+                    "foreignAuthorId": "",
+                },
+                "foreignBookId": isbn or book_data.get("id", ""),
             }
-        app.logger.info(
-            "Server match for '%s': title='%s', author=%s",
-            title, readarr_book.get("title"), json.dumps(readarr_book.get("author", {})),
-        )
-        request_entry["status"] = "processing"
+            app.logger.info("No Readarr match, using Open Library fallback for '%s' by '%s'", title, author_name)
+            request_entry["status"] = "processing"
 
         result = client.add_book(readarr_book, quality_profile_id, root_folder)
         request_entry["readarr_book_id"] = result.get("id")
@@ -740,7 +717,6 @@ def create_request():
 @login_required
 def get_requests():
     with lock:
-        load_requests()
         return jsonify(requests_history)
 
 
