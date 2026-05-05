@@ -4,12 +4,15 @@ import os
 import sys
 import threading
 import time
+from copy import deepcopy
 from datetime import datetime
 from functools import wraps
+from tempfile import NamedTemporaryFile
 
 import requests as http_requests
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from filelock import FileLock
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -66,13 +69,24 @@ app.logger.setLevel(logging.DEBUG)
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "data", "config.json")
 REQUESTS_FILE = os.path.join(os.path.dirname(__file__), "data", "requests.json")
+REQUESTS_LOCK_FILE = os.path.join(os.path.dirname(__file__), "data", "requests.lock")
 USERS_FILE = os.path.join(os.path.dirname(__file__), "data", "users.json")
+REQUEST_CLAIM_TTL_SECONDS = int(os.environ.get("REQUEST_CLAIM_TTL_SECONDS", "120"))
+REQUEST_RECOVERY_SCAN_INTERVAL_SECONDS = int(
+    os.environ.get("REQUEST_RECOVERY_SCAN_INTERVAL_SECONDS", "30")
+)
+REQUEST_RECOVERY_BATCH_SIZE = int(os.environ.get("REQUEST_RECOVERY_BATCH_SIZE", "10"))
 
 # In-memory state
 config = {"ebook": {}, "audiobook": {}, "ldap": {}, "oidc": {}}
 requests_history = []
 users = []
-lock = threading.Lock()
+lock = threading.RLock()
+requests_file_lock = FileLock(REQUESTS_LOCK_FILE, timeout=10)
+active_request_workers = set()
+active_request_workers_lock = threading.Lock()
+recovery_scan_lock = threading.Lock()
+last_recovery_scan_at = 0.0
 
 # ─── Flask-Login Setup ───
 
@@ -144,6 +158,340 @@ def ensure_data_dir():
     os.makedirs(data_dir, exist_ok=True)
 
 
+def utcnow_isoformat() -> str:
+    return datetime.utcnow().isoformat()
+
+
+def write_json_atomic(path: str, payload):
+    ensure_data_dir()
+    with NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False) as tmp:
+        json.dump(payload, tmp, indent=2, default=str)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        temp_path = tmp.name
+    os.replace(temp_path, path)
+
+
+def load_requests_from_disk_unlocked() -> list:
+    if not os.path.exists(REQUESTS_FILE):
+        return []
+    try:
+        with open(REQUESTS_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def save_requests_to_disk_unlocked(data: list):
+    write_json_atomic(REQUESTS_FILE, data)
+
+
+def read_requests_snapshot() -> list:
+    global requests_history
+
+    ensure_data_dir()
+    with lock:
+        with requests_file_lock:
+            requests_history = load_requests_from_disk_unlocked()
+            return deepcopy(requests_history)
+
+
+def mutate_requests_history(mutation):
+    global requests_history
+
+    ensure_data_dir()
+    with lock:
+        with requests_file_lock:
+            current_requests = load_requests_from_disk_unlocked()
+            result = mutation(current_requests)
+            save_requests_to_disk_unlocked(current_requests)
+            requests_history = current_requests
+            return result
+
+
+def get_request_entry(request_id: int) -> dict | None:
+    for req in read_requests_snapshot():
+        if req.get("id") == request_id:
+            return req
+    return None
+
+
+def update_request_entry(request_id: int, **updates) -> dict | None:
+    updated_request = None
+    now = utcnow_isoformat()
+
+    def mutate(current_requests):
+        nonlocal updated_request
+        for req in current_requests:
+            if req.get("id") == request_id:
+                req.update(updates)
+                req["updated_at"] = now
+                updated_request = deepcopy(req)
+                break
+        return updated_request
+
+    mutate_requests_history(mutate)
+    return updated_request
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def is_request_claim_stale(req: dict, now: datetime | None = None) -> bool:
+    claimed_at = parse_iso_datetime(req.get("claimed_at"))
+    if claimed_at is None:
+        return True
+    now = now or datetime.utcnow()
+    return (now - claimed_at).total_seconds() >= REQUEST_CLAIM_TTL_SECONDS
+
+
+def claim_request(request_id: int, *, claimed_by: str) -> dict | None:
+    claimed_request = None
+    now = utcnow_isoformat()
+
+    def mutate(current_requests):
+        nonlocal claimed_request
+        current_time = datetime.utcnow()
+        for req in current_requests:
+            if req.get("id") != request_id:
+                continue
+            if req.get("status") != "pending":
+                return None
+
+            already_claimed = req.get("claimed_by")
+            stale_claim = is_request_claim_stale(req, current_time)
+            if already_claimed and not stale_claim:
+                return None
+
+            req["claimed_by"] = claimed_by
+            req["claimed_at"] = now
+            req["attempts"] = int(req.get("attempts", 0)) + 1
+            req["updated_at"] = now
+            claimed_request = deepcopy(req)
+            return claimed_request
+        return None
+
+    mutate_requests_history(mutate)
+    return claimed_request
+
+
+def claim_recoverable_requests(limit: int = REQUEST_RECOVERY_BATCH_SIZE) -> list[int]:
+    claimed_ids = []
+    now = utcnow_isoformat()
+
+    def mutate(current_requests):
+        current_time = datetime.utcnow()
+        for req in current_requests:
+            if len(claimed_ids) >= limit:
+                break
+            if req.get("status") != "pending":
+                continue
+            if req.get("claimed_by") and not is_request_claim_stale(req, current_time):
+                continue
+
+            req["claimed_by"] = f"recovery:{os.getpid()}"
+            req["claimed_at"] = now
+            req["attempts"] = int(req.get("attempts", 0)) + 1
+            req["updated_at"] = now
+            claimed_ids.append(req["id"])
+
+    mutate_requests_history(mutate)
+    return claimed_ids
+
+def build_request_book_payload(book_data: dict) -> dict:
+    return {
+        "id": book_data.get("id", ""),
+        "title": book_data.get("title", "Unknown"),
+        "authors": list(book_data.get("authors", [])),
+        "cover": book_data.get("cover", ""),
+        "isbn_10": book_data.get("isbn_10", ""),
+        "isbn_13": book_data.get("isbn_13", ""),
+    }
+
+
+def request_worker_identity(request_id: int) -> str:
+    return f"{os.getpid()}:{threading.get_ident()}:{request_id}"
+
+
+def start_request_worker(request_id: int, *, already_claimed: bool = False):
+    with active_request_workers_lock:
+        if request_id in active_request_workers:
+            return
+        active_request_workers.add(request_id)
+
+    try:
+        worker = threading.Thread(
+            target=process_request_background,
+            args=(request_id,),
+            kwargs={"already_claimed": already_claimed},
+            daemon=True,
+            name=f"request-{request_id}",
+        )
+        worker.start()
+    except Exception:
+        with active_request_workers_lock:
+            active_request_workers.discard(request_id)
+        raise
+
+
+def maybe_schedule_request_recovery(force: bool = False):
+    global last_recovery_scan_at
+
+    now = time.monotonic()
+    with recovery_scan_lock:
+        if (
+            not force
+            and now - last_recovery_scan_at < REQUEST_RECOVERY_SCAN_INTERVAL_SECONDS
+        ):
+            return
+        last_recovery_scan_at = now
+
+    claimed_ids = claim_recoverable_requests()
+    if claimed_ids:
+        app.logger.info("Recovered %d pending request(s): %s", len(claimed_ids), claimed_ids)
+
+    for request_id in claimed_ids:
+        start_request_worker(request_id, already_claimed=True)
+
+
+def process_request_background(request_id: int, *, already_claimed: bool = False):
+    try:
+        if already_claimed:
+            update_request_entry(
+                request_id,
+                claimed_by=request_worker_identity(request_id),
+                claimed_at=utcnow_isoformat(),
+            )
+            request_entry = get_request_entry(request_id)
+        else:
+            request_entry = claim_request(
+                request_id,
+                claimed_by=request_worker_identity(request_id),
+            )
+
+        if not request_entry or request_entry.get("status") != "pending":
+            return
+
+        book_data = request_entry.get("book_payload", {})
+        title = book_data.get("title", request_entry.get("title", "Unknown"))
+        authors = book_data.get("authors", [])
+        author_name = authors[0] if authors else request_entry.get("author", "Unknown")
+        isbn = book_data.get("isbn_13") or book_data.get("isbn_10") or request_entry.get("isbn", "")
+        server_type = request_entry.get("server_type")
+        quality_profile_id = request_entry.get("quality_profile_id")
+        root_folder = request_entry.get("root_folder")
+
+        client = get_client(server_type)
+        if not client:
+            update_request_entry(
+                request_id,
+                status="error",
+                error=f"{server_type} server is not configured",
+                claimed_by=None,
+                claimed_at=None,
+            )
+            return
+
+        matched_books = []
+        if isbn:
+            try:
+                matched_books = client.lookup_by_isbn(isbn)
+            except Exception as exc:
+                app.logger.warning(
+                    "Request %s: ISBN lookup failed for %r: %s",
+                    request_id,
+                    isbn,
+                    exc,
+                )
+            if matched_books:
+                update_request_entry(request_id, claimed_at=utcnow_isoformat())
+
+        if not matched_books:
+            try:
+                matched_books = client.search_books(f"{title} {author_name}")
+            except Exception as exc:
+                app.logger.warning(
+                    "Request %s: title/author lookup failed for %r by %r: %s",
+                    request_id,
+                    title,
+                    author_name,
+                    exc,
+                )
+            if matched_books:
+                update_request_entry(request_id, claimed_at=utcnow_isoformat())
+
+        if matched_books:
+            server_book = matched_books[0]
+            if not server_book.get("author", {}).get("authorName"):
+                server_book["author"] = {
+                    "authorName": author_name,
+                    "foreignAuthorId": "",
+                }
+            app.logger.info(
+                "Request %s: matched %r to backend metadata result %r",
+                request_id,
+                title,
+                server_book.get("title"),
+            )
+        else:
+            server_book = {
+                "title": title,
+                "author": {
+                    "authorName": author_name,
+                    "foreignAuthorId": "",
+                },
+                "foreignBookId": isbn or book_data.get("id", ""),
+            }
+            app.logger.info(
+                "Request %s: no backend metadata match; using fallback for %r by %r",
+                request_id,
+                title,
+                author_name,
+            )
+
+        update_request_entry(request_id, claimed_at=utcnow_isoformat(), error=None)
+        result = client.add_book(server_book, quality_profile_id, root_folder)
+
+        update_request_entry(
+            request_id,
+            status="processing",
+            readarr_book_id=result.get("id"),
+            error=None,
+            claimed_by=None,
+            claimed_at=None,
+        )
+        app.logger.info(
+            "Request %s: successfully sent %r to %s",
+            request_id,
+            title,
+            server_type,
+        )
+    except Exception as exc:
+        request_entry = get_request_entry(request_id) or {}
+        app.logger.exception(
+            "Request %s: failed while processing %r by %r",
+            request_id,
+            request_entry.get("title", "Unknown"),
+            request_entry.get("author", "Unknown"),
+        )
+        update_request_entry(
+            request_id,
+            status="error",
+            error=str(exc),
+            claimed_by=None,
+            claimed_at=None,
+        )
+    finally:
+        with active_request_workers_lock:
+            active_request_workers.discard(request_id)
+
+
 def save_config():
     ensure_data_dir()
     with open(CONFIG_FILE, "w") as f:
@@ -161,19 +509,16 @@ def load_config():
 
 
 def save_requests():
-    ensure_data_dir()
-    with open(REQUESTS_FILE, "w") as f:
-        json.dump(requests_history, f, indent=2, default=str)
+    def mutate(current_requests):
+        current_requests[:] = deepcopy(requests_history)
+
+    mutate_requests_history(mutate)
 
 
 def load_requests():
     global requests_history
-    if os.path.exists(REQUESTS_FILE):
-        try:
-            with open(REQUESTS_FILE) as f:
-                requests_history = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
+    requests_history = read_requests_snapshot()
+    return requests_history
 
 
 def save_users():
@@ -217,6 +562,8 @@ init_default_admin()
 if OIDC_AVAILABLE:
     oidc_helper.init_oidc(app, config)
 
+maybe_schedule_request_recovery(force=True)
+
 
 @app.before_request
 def reload_state():
@@ -224,6 +571,7 @@ def reload_state():
     load_config()
     load_requests()
     load_users()
+    maybe_schedule_request_recovery()
     # Re-init the OIDC client if config changed in another worker. init_oidc
     # is idempotent — registers/unregisters the client based on enabled flag.
     if OIDC_AVAILABLE and not app.extensions.get("oidc_client") and config.get("oidc", {}).get("enabled"):
@@ -915,19 +1263,18 @@ def check_availability():
     # Also include books with active requests (pending/processing/downloading)
     active_statuses = {"pending", "processing", "downloading"}
     requests_by_type = {"ebook": {"isbns": set(), "titles": set()}, "audiobook": {"isbns": set(), "titles": set()}}
-    with lock:
-        for req in requests_history:
-            if req.get("status") not in active_statuses:
-                continue
-            server = req.get("server_type", "")
-            if server not in requests_by_type:
-                continue
-            isbn = req.get("isbn", "")
-            if isbn:
-                requests_by_type[server]["isbns"].add(isbn)
-            title = req.get("title", "")
-            if title:
-                requests_by_type[server]["titles"].add(title.lower())
+    for req in read_requests_snapshot():
+        if req.get("status") not in active_statuses:
+            continue
+        server = req.get("server_type", "")
+        if server not in requests_by_type:
+            continue
+        isbn = req.get("isbn", "")
+        if isbn:
+            requests_by_type[server]["isbns"].add(isbn)
+        title = req.get("title", "")
+        if title:
+            requests_by_type[server]["titles"].add(title.lower())
 
     result["ebook_requests"] = {
         "isbns": list(requests_by_type["ebook"]["isbns"]),
@@ -972,7 +1319,7 @@ def get_root_folders(server_type):
 @app.route("/api/request", methods=["POST"])
 @login_required
 def create_request():
-    data = request.json
+    data = request.json or {}
     server_type = data.get("server_type")
     book_data = data.get("book")
     quality_profile_id = data.get("quality_profile_id")
@@ -981,143 +1328,124 @@ def create_request():
     if not all([server_type, book_data, quality_profile_id, root_folder]):
         return jsonify({"error": "Missing required fields"}), 400
 
-    client = get_client(server_type)
-    if not client:
+    if not get_client(server_type):
         return jsonify({"error": f"{server_type} server not configured"}), 400
 
     title = book_data.get("title", "Unknown")
     authors = book_data.get("authors", [])
     author_name = authors[0] if authors else "Unknown"
     cover_url = book_data.get("cover", "")
-    isbn = book_data.get("isbn_13") or book_data.get("isbn_10", "")
+    isbn = book_data.get("isbn_13") or book_data.get("isbn_10") or ""
+    now = utcnow_isoformat()
+    request_id = int(time.time() * 1000)
 
     request_entry = {
-        "id": int(time.time() * 1000),
+        "id": request_id,
         "title": title,
         "author": author_name,
         "cover_url": cover_url,
         "server_type": server_type,
         "quality_profile_id": quality_profile_id,
+        "root_folder": root_folder,
         "isbn": isbn,
         "status": "pending",
         "progress": 0,
         "error": None,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": now,
+        "updated_at": now,
+        "book_payload": build_request_book_payload(book_data),
+        "claimed_by": f"request:{os.getpid()}",
+        "claimed_at": now,
+        "attempts": 1,
     }
 
-    try:
-        # First, try to find the book in Readarr via ISBN lookup
-        readarr_books = []
-        if isbn:
-            readarr_books = client.lookup_by_isbn(isbn)
-        if not readarr_books:
-            readarr_books = client.search_books(f"{title} {author_name}")
+    mutate_requests_history(lambda current_requests: current_requests.insert(0, request_entry))
+    start_request_worker(request_id, already_claimed=True)
 
-        if readarr_books:
-            # Use the full Readarr lookup result — it has the correct
-            # editions, images, links, etc. that Readarr expects.
-            # We only override the author if Readarr returned empty data.
-            readarr_book = readarr_books[0]
-            if not readarr_book.get("author", {}).get("authorName"):
-                readarr_book["author"] = {
-                    "authorName": author_name,
-                    "foreignAuthorId": "",
-                }
-            app.logger.info(
-                "Readarr match for '%s': title='%s', author=%s",
-                title, readarr_book.get("title"), json.dumps(readarr_book.get("author", {})),
-            )
-            request_entry["status"] = "processing"
-        else:
-            # Fallback: build data from Open Library
-            readarr_book = {
-                "title": title,
-                "author": {
-                    "authorName": author_name,
-                    "foreignAuthorId": "",
-                },
-                "foreignBookId": isbn or book_data.get("id", ""),
-            }
-            app.logger.info("No Readarr match, using Open Library fallback for '%s' by '%s'", title, author_name)
-            request_entry["status"] = "processing"
-
-        result = client.add_book(readarr_book, quality_profile_id, root_folder)
-        request_entry["readarr_book_id"] = result.get("id")
-    except Exception as e:
-        request_entry["status"] = "error"
-        request_entry["error"] = str(e)
-
-    with lock:
-        requests_history.insert(0, request_entry)
-        save_requests()
-
-    return jsonify(request_entry)
+    app.logger.info(
+        "Queued request %s instantly: %r by %r",
+        request_id,
+        title,
+        author_name,
+    )
+    return jsonify(request_entry), 202
 
 
 @app.route("/api/requests", methods=["GET"])
 @login_required
 def get_requests():
-    with lock:
-        return jsonify(requests_history)
+    return jsonify(read_requests_snapshot())
 
 
 @app.route("/api/requests/refresh", methods=["POST"])
 @login_required
 def refresh_requests():
     """Refresh the status of all processing/downloading requests."""
-    with lock:
-        for req in requests_history:
-            if req["status"] in ("completed", "error"):
+    for req in read_requests_snapshot():
+        if req.get("status") in ("completed", "error", "pending"):
+            continue
+
+        client = get_client(req.get("server_type"))
+        if not client:
+            continue
+
+        try:
+            queue = client.get_queue()
+            req_book_id = req.get("readarr_book_id")
+            matching = [
+                q for q in queue
+                if q.get("title", "").lower() == req.get("title", "").lower()
+                or (req_book_id and str(q.get("bookId")) == str(req_book_id))
+            ]
+            if matching:
+                queue_entry = matching[0]
+                status = queue_entry.get("status", "").lower()
+                size = queue_entry.get("size", 0)
+                size_left = queue_entry.get("sizeleft", 0)
+                progress = req.get("progress", 0)
+                if size > 0:
+                    progress = round((1 - size_left / size) * 100)
+
+                updates = {
+                    "status": "downloading",
+                    "progress": progress,
+                    "error": None,
+                }
+                if status == "completed":
+                    updates["status"] = "completed"
+                    updates["progress"] = 100
+                elif status in ("failed", "warning"):
+                    updates["status"] = "error"
+                    updates["error"] = queue_entry.get("errorMessage", "Download failed")
+
+                update_request_entry(req["id"], **updates)
                 continue
-            client = get_client(req["server_type"])
-            if not client:
-                continue
-            try:
-                queue = client.get_queue()
-                req_book_id = req.get("readarr_book_id")
-                matching = [
-                    q for q in queue
-                    if q.get("title", "").lower() == req["title"].lower()
-                    or (req_book_id and str(q.get("bookId")) == str(req_book_id))
-                ]
-                if matching:
-                    q = matching[0]
-                    status = q.get("status", "").lower()
-                    size = q.get("size", 0)
-                    size_left = q.get("sizeleft", 0)
-                    # Book is in the download queue
-                    req["status"] = "downloading"
-                    if size > 0:
-                        req["progress"] = round((1 - size_left / size) * 100)
-                    if status == "completed":
-                        req["status"] = "completed"
-                        req["progress"] = 100
-                    elif status in ("failed", "warning"):
-                        req["status"] = "error"
-                        req["error"] = q.get("errorMessage", "Download failed")
-                else:
-                    # Check Readarr history
-                    book_id = req.get("readarr_book_id")
-                    if book_id:
-                        book = client.get_book_status(book_id)
-                        if book and book.get("statistics"):
-                            stats = book["statistics"]
-                            if stats.get("bookFileCount", 0) > 0:
-                                req["status"] = "completed"
-                                req["progress"] = 100
-            except Exception as e:
-                pass  # Keep current status on error
-        save_requests()
-    return jsonify(requests_history)
+
+            book_id = req.get("readarr_book_id")
+            if book_id:
+                book = client.get_book_status(book_id)
+                if book and book.get("statistics"):
+                    stats = book["statistics"]
+                    if stats.get("bookFileCount", 0) > 0:
+                        update_request_entry(
+                            req["id"],
+                            status="completed",
+                            progress=100,
+                            error=None,
+                        )
+        except Exception:
+            continue
+
+    return jsonify(read_requests_snapshot())
 
 
 @app.route("/api/requests/<int:request_id>", methods=["DELETE"])
 @login_required
 def delete_request(request_id):
-    with lock:
-        global requests_history
-        requests_history = [r for r in requests_history if r["id"] != request_id]
-        save_requests()
+    def mutate(current_requests):
+        current_requests[:] = [r for r in current_requests if r.get("id") != request_id]
+
+    mutate_requests_history(mutate)
     return jsonify({"success": True})
 
 

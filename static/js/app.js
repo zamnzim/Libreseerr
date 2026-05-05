@@ -364,6 +364,7 @@ document.getElementById("confirm-download-btn").addEventListener("click", async 
         if (data.error) {
             alert("Error: " + data.error);
         } else {
+            cachedAvailability = null;
             closeModal();
             // Switch to requests page
             document.querySelector('[data-page="requests"]').click();
@@ -407,7 +408,9 @@ function renderRequest(req) {
     const fillClass = req.status === "completed" ? "complete" : req.status === "error" ? "error" : "";
 
     let statusDisplay;
-    if (req.status === "processing" || req.status === "pending") {
+    if (req.status === "pending") {
+        statusDisplay = '<span class="status-label processing"><span class="spinner"></span> Queued</span>';
+    } else if (req.status === "processing") {
         statusDisplay = '<span class="status-label processing"><span class="spinner"></span> Processing</span>';
     } else if (req.status === "completed") {
         statusDisplay = `<span class="status-label completed">Completed</span>

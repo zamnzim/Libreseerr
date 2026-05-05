@@ -117,10 +117,25 @@ Status indicators on the Requests page:
 
 | Status | Meaning |
 |---|---|
+| **Queued** | Request has been accepted and is waiting for the background worker to submit it |
 | **Processing** | Book has been sent to the server but is not yet in the download queue |
 | **Downloading** | Book is actively downloading (progress bar shown) |
 | **Completed** | Download finished and file is available in the server |
 | **Error** | Download failed (error message shown) |
+
+## Async Request Processing
+
+Libreseerr queues requests immediately and processes the backend Readarr,
+Bookshelf, or LazyLibrarian call in the background.
+
+When a user clicks **Download**:
+
+1. The request is saved immediately with status `pending`.
+2. The browser receives a `202 Accepted` response right away.
+3. A background worker sends the book to the configured backend.
+4. The request status changes to `processing`, `downloading`, `completed`, or `error`.
+
+This avoids browser timeouts when Bookshelf or metadata providers are slow.
 
 ## User Management
 
@@ -157,6 +172,12 @@ The redirect URI to register at your IdP is `https://<your-libreseerr-host>/api/
 |---|---|---|
 | `PYTHONUNBUFFERED` | Ensures Python logs appear immediately in container output | `1` |
 | `SECRET_KEY` | Flask session secret key. Set this to a stable value in production | Auto-generated on first run |
+| `BOOKSHELF_LOOKUP_TIMEOUT` | Timeout in seconds for Bookshelf `/book/lookup` calls | `20` |
+| `BOOKSHELF_AUTHOR_LOOKUP_TIMEOUT` | Timeout in seconds for Bookshelf `/author/lookup` calls | `20` |
+| `BOOKSHELF_API_TIMEOUT` | Timeout in seconds for Bookshelf add/update API calls | `30` |
+| `REQUEST_CLAIM_TTL_SECONDS` | How long a queued request lease stays valid before recovery can reclaim it | `120` |
+| `REQUEST_RECOVERY_SCAN_INTERVAL_SECONDS` | Minimum interval between background recovery scans | `30` |
+| `REQUEST_RECOVERY_BATCH_SIZE` | Maximum number of pending requests reclaimed per recovery scan | `10` |
 
 All application configuration (server URLs, API keys, and server software type) is managed through the web UI and stored in `/app/data/config.json`.
 
@@ -170,6 +191,17 @@ Application data is stored in `/app/data/` and includes:
 - `secret_key` - Auto-generated session signing key (only created if `SECRET_KEY` is not set via environment)
 
 Mount a volume at `/app/data` to persist this data across container restarts.
+
+## Fork Image Publishing
+
+This fork can publish its own image to GitHub Container Registry with the included
+workflow in `.github/workflows/docker-publish.yml`.
+
+The published image name is:
+
+```text
+ghcr.io/<your-github-owner>/libreseerr:latest
+```
 
 ## Development
 
