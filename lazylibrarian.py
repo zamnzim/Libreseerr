@@ -1,10 +1,56 @@
 import json
 import logging
+import re
 from typing import Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# --- Request-resolution hardening -------------------------------------------
+# Fixes three failure modes when handing a request to LazyLibrarian:
+#   (1) findBook results[0] grabs "summary"/"study guide" editions instead of
+#       the real book (e.g. "The Martian" -> "Book Summary of THE MARTIAN"),
+#   (2) a non-LazyLibrarian id (e.g. an Open Library OL...W id) is passed to
+#       addBook and silently does nothing -> request stuck on "processing",
+#   (3) the ISBN lookup (searchItem) can return HTTP 500 and hang the caller.
+_JUNK_TITLE_MARKERS = (
+    "summary", "study guide", "studyguide", "reviewed by",
+    "conversation starters", "key takeaways", "instaread", "quicklet",
+    "blinkist", "sidekick by", "summaries", "trivia-on",
+)
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9 ]", " ", (s or "").lower())
+
+
+def _is_junk_title(title: str) -> bool:
+    t = _norm(title)
+    return any(m in t for m in _JUNK_TITLE_MARKERS)
+
+
+def _looks_like_ll_id(value) -> bool:
+    """True for a plausible LazyLibrarian/GoodReads numeric BookID (NOT an Open Library OL...W id)."""
+    return bool(value) and str(value).isdigit()
+
+
+def _rank(books: list, query: str) -> list:
+    """Drop junk editions (summaries etc.) and sort by how well title+author match the query."""
+    qtokens = set(_norm(query).split())
+    scored = []
+    for b in books:
+        if not b.get("foreignBookId"):
+            continue
+        if _is_junk_title(b.get("title", "")):
+            continue
+        ttokens = set(_norm(b.get("title", "")).split())
+        atokens = set(_norm((b.get("author") or {}).get("authorName", "")).split())
+        title_cov = len(ttokens & qtokens) / len(ttokens) if ttokens else 0.0
+        author_hit = 1.0 if (atokens and (atokens & qtokens)) else 0.0
+        scored.append((title_cov + 0.5 * author_hit, b))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [b for _, b in scored]
 
 
 class LazyLibrarianClient:
@@ -37,46 +83,39 @@ class LazyLibrarianClient:
             return result
         return {"version": "unknown"}
 
+    def _map_book(self, b: dict) -> dict:
+        return {
+            "title": b.get("bookname", "Unknown"),
+            "author": {
+                "authorName": b.get("authorname", "Unknown"),
+                "foreignAuthorId": b.get("authorid", ""),
+            },
+            "foreignBookId": b.get("bookid", ""),
+            "foreignEditionId": b.get("bookisbn", ""),
+            "overview": b.get("bookdesc", ""),
+            "releaseDate": b.get("bookdate", ""),
+            "ratings": {"value": float(b.get("bookrate", 0))} if b.get("bookrate") else {},
+        }
+
     def search_books(self, query: str) -> list:
-        """Search for books by name using findBook."""
+        """Search for books by name using findBook. Junk editions (summaries/study
+        guides) are dropped and the best title/author match is returned first."""
         result = self._get("findBook", name=query)
         if not isinstance(result, list):
             return []
-        return [
-            {
-                "title": b.get("bookname", "Unknown"),
-                "author": {
-                    "authorName": b.get("authorname", "Unknown"),
-                    "foreignAuthorId": b.get("authorid", ""),
-                },
-                "foreignBookId": b.get("bookid", ""),
-                "foreignEditionId": b.get("bookisbn", ""),
-                "overview": b.get("bookdesc", ""),
-                "releaseDate": b.get("bookdate", ""),
-                "ratings": {"value": float(b.get("bookrate", 0))} if b.get("bookrate") else {},
-            }
-            for b in result
-        ]
+        return _rank([self._map_book(b) for b in result], query)
 
     def lookup_by_isbn(self, isbn: str) -> list:
-        """Look up a book by ISBN using searchItem."""
-        result = self._get("searchItem", item=isbn)
+        """Look up a book by ISBN using searchItem. Returns [] on LazyLibrarian
+        errors (searchItem can return HTTP 500) so callers fall back to name search."""
+        try:
+            result = self._get("searchItem", item=isbn)
+        except requests.exceptions.RequestException as e:
+            logger.warning("ISBN lookup (searchItem) failed for %s: %s", isbn, e)
+            return []
         if not isinstance(result, list):
             return []
-        return [
-            {
-                "title": b.get("bookname", "Unknown"),
-                "author": {
-                    "authorName": b.get("authorname", "Unknown"),
-                    "foreignAuthorId": b.get("authorid", ""),
-                },
-                "foreignBookId": b.get("bookid", ""),
-                "foreignEditionId": b.get("bookisbn", ""),
-                "overview": b.get("bookdesc", ""),
-                "releaseDate": b.get("bookdate", ""),
-            }
-            for b in result
-        ]
+        return [self._map_book(b) for b in result]
 
     def lookup_author(self, name: str) -> list:
         """Look up an author by name using findAuthor."""
@@ -100,20 +139,33 @@ class LazyLibrarianClient:
         return [{"path": "/books"}]
 
     def add_book(self, book_data: dict, quality_profile_id: int, root_folder: str) -> dict:
-        """Add a book to LazyLibrarian and mark it as wanted."""
-        book_id = book_data.get("foreignBookId", "")
+        """Add a book to LazyLibrarian and mark it as wanted.
+
+        Resolves the correct BookID robustly: an incoming numeric id is trusted only
+        if its title is not an obvious junk edition; otherwise we re-resolve by
+        title+author via findBook and take the best real match. Raises ValueError
+        (loud, not silent) when only a non-LazyLibrarian id (e.g. an Open Library
+        OL...W id) is available, so a bad request surfaces as an error instead of
+        grabbing the wrong book.
+        """
         title = book_data.get("title", "Unknown")
+        author = (book_data.get("author") or {}).get("authorName", "") or ""
+        incoming_id = str(book_data.get("foreignBookId", "") or "")
 
-        if not book_id:
-            # Try to find the book first
-            results = self.search_books(f"{title} {book_data.get('author', {}).get('authorName', '')}")
-            if results:
-                book_id = results[0].get("foreignBookId", "")
+        if _looks_like_ll_id(incoming_id) and not _is_junk_title(title):
+            book_id = incoming_id
+        else:
+            matches = self.search_books(f"{title} {author}".strip())
+            book_id = matches[0].get("foreignBookId", "") if matches else ""
 
-        if not book_id:
-            raise ValueError(f"Could not find book ID for '{title}' in LazyLibrarian")
+        if not _looks_like_ll_id(book_id):
+            raise ValueError(
+                f"No valid LazyLibrarian book id could be resolved for '{title}' by "
+                f"'{author or 'unknown'}' (only non-matching/summary results or a "
+                f"non-LazyLibrarian id '{incoming_id}'). Rejecting the request "
+                f"instead of adding the wrong book."
+            )
 
-        # Add the book to the database
         logger.info("Adding book to LazyLibrarian: '%s' (id=%s)", title, book_id)
         add_result = self._get("addBook", id=book_id)
         logger.info("addBook result: %s", add_result)
