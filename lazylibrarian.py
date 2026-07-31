@@ -87,7 +87,7 @@ class LazyLibrarianClient:
         """Make a GET request to the LazyLibrarian API."""
         query = {"apikey": self.api_key, "cmd": cmd}
         query.update(params)
-        resp = self.session.get(f"{self.base_url}/api", params=query, timeout=15)
+        resp = self.session.get(f"{self.base_url}/api", params=query, timeout=60)
         resp.raise_for_status()
         try:
             return resp.json()
