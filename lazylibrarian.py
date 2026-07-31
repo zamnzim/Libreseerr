@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 _JUNK_TITLE_MARKERS = (
     "summary", "study guide", "studyguide", "reviewed by",
     "conversation starters", "key takeaways", "instaread", "quicklet",
-    "blinkist", "sidekick by", "summaries", "trivia-on",
+    "blinkist", "sidekick by", "summaries", "trivia-on", "novel unit",
+    "teacher's guide", "teachers guide", "discussion guide", "book club kit",
+    "lesson plan",
+)
+
+_JUNK_AUTHOR_MARKERS = (
+    "supersummary", "bookrags", "good prints", "good reads publishing",
+    "instaread", "quicklet", "worth books", "everest media",
+    "brightsummaries", "intro books", "hyper summary", "ant hive media",
 )
 
 
@@ -28,6 +36,11 @@ def _norm(s: str) -> str:
 def _is_junk_title(title: str) -> bool:
     t = _norm(title)
     return any(m in t for m in _JUNK_TITLE_MARKERS)
+
+
+def _is_junk_author(author_name: str) -> bool:
+    a = _norm(author_name)
+    return any(m in a for m in _JUNK_AUTHOR_MARKERS)
 
 
 def _looks_like_ll_id(value) -> bool:
@@ -50,6 +63,8 @@ def _rank(books: list, query: str) -> list:
         if not b.get("foreignBookId"):
             continue
         if _is_junk_title(b.get("title", "")):
+            continue
+        if _is_junk_author((b.get("author") or {}).get("authorName", "")):
             continue
         ttokens = set(_norm(b.get("title", "")).split())
         atokens = set(_norm((b.get("author") or {}).get("authorName", "")).split())
