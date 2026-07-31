@@ -196,6 +196,9 @@ class LazyLibrarianClient:
         queue_result = self._get("queueBook", id=book_id, type="eBook")
         logger.info("queueBook result: %s", queue_result)
 
+        search_result = self._get("searchBook", id=book_id, type="eBook")
+        logger.info("searchBook result: %s", search_result)
+
         return {
             "id": book_id,
             "title": title,
