@@ -206,39 +206,69 @@ class LazyLibrarianClient:
         }
 
     def get_queue(self) -> list:
-        """Get wanted books (equivalent to a download queue)."""
+        """Get wanted books (equivalent to a download queue).
+
+        LazyLibrarian's getWanted/getSnatched/getAllBooks commands return
+        PascalCase field names (BookID, BookName) -- unlike findBook/
+        searchItem, which return lowercase. Using the wrong case here
+        silently no-ops every id/title lookup, since every entry maps to
+        the fallback "" / "Unknown" instead of a real value.
+        """
         result = self._get("getWanted")
         if not isinstance(result, list):
             return []
         return [
             {
-                "title": b.get("bookname", "Unknown"),
+                "title": b.get("BookName", "Unknown"),
                 "status": "downloading",
                 "size": 0,
                 "sizeleft": 0,
-                "bookId": b.get("bookid", ""),
+                "bookId": b.get("BookID", ""),
             }
             for b in result
         ]
 
     def get_book_status(self, book_id: int) -> Optional[dict]:
-        """Get the status of a specific book."""
-        # LazyLibrarian doesn't have a direct "get book by ID" for status,
-        # so we check snatched books
+        """Get the status of a specific book.
+
+        LazyLibrarian doesn't have a "get book by id" call, so we check its
+        library state via getAllBooks (PascalCase fields -- see get_queue).
+        Status=="Have" gets set as soon as a download is post-processed,
+        even if the calibre import itself was rejected (e.g. a false-
+        positive duplicate) -- BookLibrary is only stamped once calibre
+        confirms the book actually landed in the library, so that's the
+        signal we trust. Falls back to getSnatched for records getAllBooks
+        omits (e.g. malformed entries missing an AuthorID join).
+        """
+        result = self._get("getAllBooks")
+        if isinstance(result, list):
+            for b in result:
+                if str(b.get("BookID", "")) == str(book_id):
+                    have = bool(b.get("BookLibrary"))
+                    return {
+                        "id": book_id,
+                        "title": b.get("BookName", "Unknown"),
+                        "statistics": {"bookFileCount": 1 if have else 0},
+                    }
         result = self._get("getSnatched")
         if isinstance(result, list):
             for b in result:
-                if str(b.get("bookid", "")) == str(book_id):
+                if str(b.get("BookID", "")) == str(book_id):
+                    have = (b.get("Status") or "").lower() == "have"
                     return {
                         "id": book_id,
-                        "title": b.get("bookname", "Unknown"),
-                        "statistics": {"bookFileCount": 1},
+                        "title": b.get("BookName", "Unknown"),
+                        "statistics": {"bookFileCount": 1 if have else 0},
                     }
         return None
 
     def get_books(self) -> list:
-        """Get all books from the LazyLibrarian library."""
-        result = self._get("getBooks")
+        """Get all books from the LazyLibrarian library.
+
+        NOTE: LazyLibrarian has no "getBooks" command (returns HTTP 405
+        Unknown command) -- the real command is getAllBooks.
+        """
+        result = self._get("getAllBooks")
         if not isinstance(result, list):
             return []
         return result
@@ -250,9 +280,9 @@ class LazyLibrarianClient:
             return []
         return [
             {
-                "title": b.get("bookname", "Unknown"),
+                "title": b.get("BookName", "Unknown"),
                 "status": "completed",
-                "date": b.get("added", ""),
+                "date": b.get("BookAdded", ""),
             }
             for b in result
         ]
