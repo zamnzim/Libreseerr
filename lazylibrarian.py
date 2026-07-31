@@ -31,8 +31,15 @@ def _is_junk_title(title: str) -> bool:
 
 
 def _looks_like_ll_id(value) -> bool:
-    """True for a plausible LazyLibrarian/GoodReads numeric BookID (NOT an Open Library OL...W id)."""
-    return bool(value) and str(value).isdigit()
+    """True for a plausible LazyLibrarian BookID: either a numeric GoodReads-style
+    id, or an Open Library work id (e.g. OL21745884W), now that LazyLibrarian's own
+    Primary Information Source is OpenLibrary."""
+    if not value:
+        return False
+    s = str(value)
+    if s.isdigit():
+        return True
+    return bool(re.fullmatch(r"OL\d+[A-Za-z]", s))
 
 
 def _rank(books: list, query: str) -> list:
