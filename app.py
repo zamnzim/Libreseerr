@@ -629,9 +629,11 @@ def oidc_callback():
         return redirect(url_for("login") + "?error=oidc_token_exchange_failed")
 
     userinfo = token.get("userinfo")
-    if not userinfo:
+    if "preferred_username" not in userinfo:
         try:
-            userinfo = client.userinfo(token=token)
+            fetched_info = client.userinfo(token=token)
+            if fetched_info:
+                userinfo.update(fetched_info)
         except Exception as e:
             app.logger.warning("OIDC userinfo fetch failed: %s", e)
             return redirect(url_for("login") + "?error=oidc_userinfo_failed")
