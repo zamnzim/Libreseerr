@@ -203,7 +203,15 @@ class ReadarrClient:
 
         # Check if the book already exists in Readarr
         if foreign_book_id:
-            existing_books = self.session.get(self._url("/book"), timeout=15).json()
+            # Scoped to this author rather than fetching the whole library --
+            # on a large library /book with no filter can be tens of MB and
+            # take several seconds, which can exceed this call's own timeout
+            # under load. authorId is already known from added_author above.
+            existing_books = self.session.get(
+                self._url("/book"),
+                params={"authorId": added_author.get("id")},
+                timeout=15,
+            ).json()
             match = next(
                 (b for b in existing_books if b.get("foreignBookId") == foreign_book_id),
                 None,
@@ -252,8 +260,13 @@ class ReadarrClient:
 
         if not resp.ok:
             # The book may already exist (orphaned from a prior partial add).
-            # Re-check and return the existing book.
-            existing_books = self.session.get(self._url("/book"), timeout=15).json()
+            # Re-check and return the existing book. Scoped to this author,
+            # same reasoning as the pre-check above.
+            existing_books = self.session.get(
+                self._url("/book"),
+                params={"authorId": added_author.get("id")},
+                timeout=15,
+            ).json()
             match = next(
                 (b for b in existing_books if b.get("foreignBookId") == foreign_book_id),
                 None,
