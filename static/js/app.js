@@ -104,10 +104,72 @@ searchInput.addEventListener("input", () => {
     searchTimeout = setTimeout(doSearch, 500);
 });
 
+// Search options (field / sort / English / hide coverless), paging, remembered prefs.
+const searchState = { query: "", page: 1, total: 0, loaded: 0, seq: 0 };
+const PREFS_KEY = "libreseerr-search-prefs";
+
+function loadSearchPrefs() {
+    try {
+        const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+        if (p.sort) document.getElementById("search-sort").value = p.sort;
+        if (typeof p.english === "boolean") document.getElementById("search-english").checked = p.english;
+        if (typeof p.covers === "boolean") document.getElementById("search-covers").checked = p.covers;
+        if (p.field) setSearchField(p.field);
+    } catch { /* storage unavailable: keep defaults */ }
+}
+
+function saveSearchPrefs() {
+    try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify({
+            sort: document.getElementById("search-sort").value,
+            english: document.getElementById("search-english").checked,
+            covers: document.getElementById("search-covers").checked,
+            field: currentSearchField(),
+        }));
+    } catch { /* ignore */ }
+}
+
+function currentSearchField() {
+    return document.querySelector("#search-field .seg-btn.active")?.dataset.field || "all";
+}
+
+function setSearchField(field) {
+    document.querySelectorAll("#search-field .seg-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.field === field);
+    });
+}
+
+document.querySelectorAll("#search-field .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+        setSearchField(btn.dataset.field);
+        saveSearchPrefs();
+        doSearch();
+    });
+});
+["search-sort", "search-english"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => { saveSearchPrefs(); doSearch(); });
+});
+// Hiding coverless books is purely visual; no need to re-query.
+document.getElementById("search-covers").addEventListener("change", () => {
+    saveSearchPrefs();
+    applyCoverFilter();
+});
+document.getElementById("load-more-btn").addEventListener("click", () => fetchSearchPage(true));
+
+function applyCoverFilter() {
+    const hide = document.getElementById("search-covers").checked;
+    document.getElementById("search-results").classList.toggle("hide-coverless", hide);
+}
+
+function setSearchMode(on) {
+    document.getElementById("discovery-content").style.display = on ? "none" : "";
+    document.getElementById("search-results").style.display = on ? "" : "none";
+    document.getElementById("search-toolbar").style.display = on ? "" : "none";
+    if (!on) document.getElementById("search-more").style.display = "none";
+}
+
 async function doSearch() {
     const query = searchInput.value.trim();
-    const container = document.getElementById("discovery-content");
-    const grid = document.getElementById("search-results");
 
     // Make sure we're on the search page
     if (!document.getElementById("page-search").classList.contains("active")) {
@@ -119,31 +181,118 @@ async function doSearch() {
         return;
     }
 
-    // Switch to search mode
-    container.style.display = "none";
-    grid.style.display = "";
+    setSearchMode(true);
+    searchState.query = query;
+    searchState.page = 1;
+    searchState.loaded = 0;
+    await fetchSearchPage(false);
+}
 
-    grid.innerHTML = '<div class="empty-state"><div class="spinner"></div> Searching...</div>';
+async function fetchSearchPage(append) {
+    const grid = document.getElementById("search-results");
+    const more = document.getElementById("search-more");
+    const moreBtn = document.getElementById("load-more-btn");
+    const count = document.getElementById("search-count");
+    const seq = ++searchState.seq;   // drop responses from superseded searches
+    const page = append ? searchState.page + 1 : 1;
+
+    if (append) {
+        moreBtn.disabled = true;
+        moreBtn.textContent = "Loading...";
+    } else {
+        grid.innerHTML = '<div class="empty-state"><div class="spinner"></div> Searching...</div>';
+        more.style.display = "none";
+        count.textContent = "";
+    }
+
+    const params = new URLSearchParams({
+        q: searchState.query,
+        field: currentSearchField(),
+        sort: document.getElementById("search-sort").value,
+        english: document.getElementById("search-english").checked ? "1" : "0",
+        page: String(page),
+    });
 
     try {
-        const resp = await fetch("/api/search?q=" + encodeURIComponent(query));
+        const resp = await fetch("/api/search?" + params);
         const data = await resp.json();
+        if (seq !== searchState.seq) return;
         if (data.error) {
-            grid.innerHTML = `<div class="empty-state">Error: ${data.error}</div>`;
+            if (!append) grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(data.error)}</div>`;
             return;
         }
-        if (!data.length) {
-            grid.innerHTML = '<div class="empty-state">No results found</div>';
+        const results = data.results || [];
+        searchState.page = page;
+        searchState.total = data.total || 0;
+
+        if (!append && !results.length) {
+            grid.innerHTML = '<div class="empty-state">No results found. Check the spelling, or try searching by Title or Author.</div>';
             return;
         }
-        grid.innerHTML = data.map(renderBookCard).join("");
-        grid.querySelectorAll(".book-card").forEach((card) => {
+        const html = results.map(renderBookCard).join("");
+        if (append) grid.insertAdjacentHTML("beforeend", html);
+        else grid.innerHTML = html;
+        searchState.loaded += results.length;
+
+        grid.querySelectorAll(".book-card:not([data-bound])").forEach((card) => {
+            card.dataset.bound = "1";
             card.addEventListener("click", () => openDownloadModal(JSON.parse(card.dataset.book)));
         });
+        applyCoverFilter();
+        count.textContent = `Showing ${searchState.loaded.toLocaleString()} of ${searchState.total.toLocaleString()}`;
+        more.style.display = searchState.loaded < searchState.total && results.length ? "" : "none";
         fetchAvailability().then(applyAvailabilityBadges);
     } catch (err) {
-        grid.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+        if (seq === searchState.seq && !append) {
+            grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
+        }
+    } finally {
+        moreBtn.disabled = false;
+        moreBtn.textContent = "Load more";
     }
+}
+
+// Everything rendered here comes from Open Library, a crowd-edited catalog, and is
+// interpolated into innerHTML, so it must be escaped (#20).
+function escapeHtml(str) {
+    if (str === null || str === undefined) return "";
+    return String(str).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+}
+
+// Generated locally so it can never fail to load. The previous fallback pointed at
+// via.placeholder.com, which is offline: the fallback itself errored, onerror fired
+// again, and every coverless card flashed between a broken image and its alt text.
+function coverPlaceholder(title) {
+    const words = String(title || "No cover").split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+        if (line && (line + " " + w).length > 14) {
+            lines.push(line);
+            line = w;
+            if (lines.length === 5) break;
+        } else {
+            line = (line + " " + w).trim();
+        }
+    }
+    if (line && lines.length < 5) lines.push(line);
+    const text = lines.map((l, i) =>
+        `<text x="100" y="${120 + i * 24}" text-anchor="middle">${escapeHtml(l.length > 16 ? l.slice(0, 15) + "…" : l)}</text>`).join("");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300">` +
+        `<rect width="200" height="300" fill="#1f2937"/>` +
+        `<rect x="12" y="12" width="176" height="276" fill="none" stroke="#ec4899" stroke-opacity=".45" stroke-width="2" rx="6"/>` +
+        `<g font-family="Inter,sans-serif" font-size="17" font-weight="600" fill="#f3f4f6">${text}</g>` +
+        `<text x="100" y="270" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" fill="#9ca3af">No cover</text></svg>`;
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+// onerror handler: detaches itself first so it can only ever run once per image.
+function coverFail(img) {
+    img.onerror = null;
+    img.src = coverPlaceholder(img.dataset.title || img.alt);
+    img.closest(".book-card")?.classList.add("no-cover");
 }
 
 function renderBookCard(book) {
@@ -154,21 +303,24 @@ function renderBookCard(book) {
     if (book.author?.images?.length) cover = book.author.images[0].url;
     if (!cover && book.images?.length) cover = book.images[0].url;
     if (!cover && book.cover) cover = book.cover;
-    if (!cover) cover = "https://via.placeholder.com/200x300/1f2937/ec4899?text=No+Cover";
-    const bookJson = JSON.stringify(book).replace(/"/g, "&quot;");
+    const hasCover = !!cover;
+    if (!cover) cover = coverPlaceholder(title);
+    const bookJson = escapeHtml(JSON.stringify(book));
+    const meta = [year, book.rating ? `★ ${book.rating}` : "", book.editions > 1 ? `${book.editions} editions` : ""]
+        .filter(Boolean).join(" · ");
 
     return `
-        <div class="book-card" data-book="${bookJson}">
-            <img class="book-cover" src="${cover}" alt="${title}" loading="lazy"
-                 onerror="this.src='https://via.placeholder.com/200x300/1f2937/ec4899?text=No+Cover'">
+        <div class="book-card${hasCover ? "" : " no-cover"}" data-book="${bookJson}">
+            <img class="book-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(title)}" data-title="${escapeHtml(title)}"
+                 loading="lazy" onerror="coverFail(this)">
             <div class="book-overlay">
-                <div class="book-overlay-title">${title}</div>
-                <div class="book-overlay-author">${author}${year ? " (" + year + ")" : ""}</div>
+                <div class="book-overlay-title">${escapeHtml(title)}</div>
+                <div class="book-overlay-author">${escapeHtml(author)}${year ? " (" + escapeHtml(year) + ")" : ""}</div>
             </div>
             <div class="book-info">
-                <div class="book-title" title="${title}">${title}</div>
-                <div class="book-author">${author}</div>
-                ${year ? `<div class="book-year">${year}</div>` : ""}
+                <div class="book-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+                <div class="book-author">${escapeHtml(author)}</div>
+                ${meta ? `<div class="book-year">${escapeHtml(meta)}</div>` : ""}
             </div>
         </div>`;
 }
@@ -232,10 +384,9 @@ function renderDiscoveryRow(category) {
 
 async function loadDiscovery() {
     const container = document.getElementById("discovery-content");
-    const searchResults = document.getElementById("search-results");
 
-    container.style.display = "";
-    searchResults.style.display = "none";
+    searchState.seq++;   // cancel any in-flight search render
+    setSearchMode(false);
 
     container.innerHTML = '<div class="discovery-loading"><div class="spinner"></div> Loading discovery...</div>';
 
@@ -402,7 +553,7 @@ async function loadRequests() {
 }
 
 function renderRequest(req) {
-    const cover = req.cover_url || "https://via.placeholder.com/50x75/1f2937/ec4899?text=N/A";
+    const cover = req.cover_url || coverPlaceholder(req.title);
     const progress = req.progress || 0;
     const fillClass = req.status === "completed" ? "complete" : req.status === "error" ? "error" : "";
 
@@ -416,27 +567,27 @@ function renderRequest(req) {
                 </div>`;
     } else if (req.status === "error") {
         statusDisplay = `<span class="status-label error">Error</span>
-                ${req.error ? `<div class="request-error" title="${req.error}">${req.error}</div>` : ""}`;
+                ${req.error ? `<div class="request-error" title="${escapeHtml(req.error)}">${escapeHtml(req.error)}</div>` : ""}`;
     } else {
         // downloading
         statusDisplay = `<span class="status-label downloading">Downloading</span>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: ${progress}%"></div>
+                    <div class="progress-fill" style="width: ${Number(progress) || 0}%"></div>
                 </div>`;
     }
 
     return `
         <div class="request-item">
-            <img class="request-cover" src="${cover}" alt="${req.title}"
-                 onerror="this.src='https://via.placeholder.com/50x75/1f2937/ec4899?text=N/A'">
+            <img class="request-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(req.title)}"
+                 data-title="${escapeHtml(req.title)}" onerror="coverFail(this)">
             <div class="request-details">
-                <div class="request-title">${req.title}</div>
-                <div class="request-meta">${req.author || ""}</div>
-                <span class="request-server ${req.server_type}">${req.server_type}</span>
+                <div class="request-title">${escapeHtml(req.title)}</div>
+                <div class="request-meta">${escapeHtml(req.author || "")}</div>
+                <span class="request-server ${escapeHtml(req.server_type)}">${escapeHtml(req.server_type)}</span>
             </div>
             <div class="request-status">
                 ${statusDisplay}
-                <button class="btn btn-small btn-danger delete-btn" data-id="${req.id}" style="margin-top: 0.4rem">Remove</button>
+                <button class="btn btn-small btn-danger delete-btn" data-id="${escapeHtml(req.id)}" style="margin-top: 0.4rem">Remove</button>
             </div>
         </div>`;
 }
@@ -855,6 +1006,7 @@ window.testOIDC = async function () {
 // ─── Init ───
 
 // Load current user first, then the rest
+loadSearchPrefs();
 loadCurrentUser().then(() => {
     loadConfig();
     loadDiscovery();
