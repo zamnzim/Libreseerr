@@ -744,17 +744,32 @@ def test_config():
 # and asks API clients to identify themselves.
 _OL_HEADERS = {"User-Agent": "Libreseerr (+https://github.com/zamnzim/Libreseerr)"}
 
+_SEARCH_PAGE_SIZE = 60
+# Only the fields we use; full docs carry huge isbn/edition lists.
+_OL_SEARCH_FIELDS = ("key,title,author_name,first_publish_year,isbn,cover_i,language,"
+                     "number_of_pages_median,subject,edition_count,ratings_average,ratings_count")
+# UI sort key -> Open Library sort param (None = relevance)
+_OL_SORTS = {"relevance": None, "popular": "readinglog", "rating": "rating", "new": "new",
+             "old": "old", "editions": "editions", "title": "title"}
 
-def _ol_get(endpoint, params, timeout=10):
-    """GET an Open Library API endpoint and return the decoded JSON."""
-    resp = http_requests.get(
-        f"https://openlibrary.org/{endpoint}",
-        params=params,
-        headers=_OL_HEADERS,
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    return resp.json()
+
+def _ol_get(endpoint, params, timeout=15):
+    """GET an Open Library API endpoint and return the decoded JSON.
+
+    Some queries (e.g. q=subject:classics) come back truncated (IncompleteRead)
+    only when a "fields" list is sent, so retry once without it."""
+    url = f"https://openlibrary.org/{endpoint}"
+    try:
+        resp = http_requests.get(url, params=params, headers=_OL_HEADERS, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        if "fields" not in params:
+            raise
+        params = {k: v for k, v in params.items() if k != "fields"}
+        resp = http_requests.get(url, params=params, headers=_OL_HEADERS, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
 
 
 def _normalize_ol_doc(doc):
@@ -782,6 +797,9 @@ def _normalize_ol_doc(doc):
         "publishedDate": published_date,
         "description": "",
         "pageCount": doc.get("number_of_pages_median", 0),
+        "rating": round(doc.get("ratings_average") or 0, 1),
+        "ratingCount": doc.get("ratings_count", 0),
+        "editions": doc.get("edition_count", 0),
         "categories": doc.get("subject", [])[:5] if doc.get("subject") else [],
         "isbn_13": isbn_13,
         "isbn_10": isbn_10,
@@ -849,6 +867,8 @@ def discover_books():
         if category == "new_releases":
             year = datetime.now().year
             params = {**params, "q": f"first_publish_year:[{year - 1} TO {year}]"}
+        if endpoint == "search.json":
+            params = {**params, "fields": _OL_SEARCH_FIELDS}
         data = _ol_get(endpoint, params)
 
         if endpoint == "search.json":
@@ -871,10 +891,28 @@ def search_books():
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify([])
+    params = {"limit": _SEARCH_PAGE_SIZE, "fields": _OL_SEARCH_FIELDS}
+    field = request.args.get("field", "all")
+    if field == "title":
+        params["title"] = query
+    elif field == "author":
+        params["author"] = query
+    else:
+        params["q"] = query
+    sort = _OL_SORTS.get(request.args.get("sort", "relevance"))
+    if sort:
+        params["sort"] = sort
+    if request.args.get("english", "1") == "1":
+        params["language"] = "eng"
     try:
-        data = _ol_get("search.json", {"q": query, "limit": 20})
+        params["page"] = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        params["page"] = 1
+    try:
+        data = _ol_get("search.json", params)
         results = [_normalize_ol_doc(doc) for doc in data.get("docs", [])]
-        return jsonify(results)
+        return jsonify({"results": results, "total": data.get("numFound", 0),
+                        "page": params["page"], "pageSize": _SEARCH_PAGE_SIZE})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

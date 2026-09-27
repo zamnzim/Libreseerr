@@ -104,10 +104,72 @@ searchInput.addEventListener("input", () => {
     searchTimeout = setTimeout(doSearch, 500);
 });
 
+// Search options (field / sort / English / hide coverless), paging, remembered prefs.
+const searchState = { query: "", page: 1, total: 0, loaded: 0, seq: 0 };
+const PREFS_KEY = "libreseerr-search-prefs";
+
+function loadSearchPrefs() {
+    try {
+        const p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+        if (p.sort) document.getElementById("search-sort").value = p.sort;
+        if (typeof p.english === "boolean") document.getElementById("search-english").checked = p.english;
+        if (typeof p.covers === "boolean") document.getElementById("search-covers").checked = p.covers;
+        if (p.field) setSearchField(p.field);
+    } catch { /* storage unavailable: keep defaults */ }
+}
+
+function saveSearchPrefs() {
+    try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify({
+            sort: document.getElementById("search-sort").value,
+            english: document.getElementById("search-english").checked,
+            covers: document.getElementById("search-covers").checked,
+            field: currentSearchField(),
+        }));
+    } catch { /* ignore */ }
+}
+
+function currentSearchField() {
+    return document.querySelector("#search-field .seg-btn.active")?.dataset.field || "all";
+}
+
+function setSearchField(field) {
+    document.querySelectorAll("#search-field .seg-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.field === field);
+    });
+}
+
+document.querySelectorAll("#search-field .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+        setSearchField(btn.dataset.field);
+        saveSearchPrefs();
+        doSearch();
+    });
+});
+["search-sort", "search-english"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => { saveSearchPrefs(); doSearch(); });
+});
+// Hiding coverless books is purely visual; no need to re-query.
+document.getElementById("search-covers").addEventListener("change", () => {
+    saveSearchPrefs();
+    applyCoverFilter();
+});
+document.getElementById("load-more-btn").addEventListener("click", () => fetchSearchPage(true));
+
+function applyCoverFilter() {
+    const hide = document.getElementById("search-covers").checked;
+    document.getElementById("search-results").classList.toggle("hide-coverless", hide);
+}
+
+function setSearchMode(on) {
+    document.getElementById("discovery-content").style.display = on ? "none" : "";
+    document.getElementById("search-results").style.display = on ? "" : "none";
+    document.getElementById("search-toolbar").style.display = on ? "" : "none";
+    if (!on) document.getElementById("search-more").style.display = "none";
+}
+
 async function doSearch() {
     const query = searchInput.value.trim();
-    const container = document.getElementById("discovery-content");
-    const grid = document.getElementById("search-results");
 
     // Make sure we're on the search page
     if (!document.getElementById("page-search").classList.contains("active")) {
@@ -119,30 +181,74 @@ async function doSearch() {
         return;
     }
 
-    // Switch to search mode
-    container.style.display = "none";
-    grid.style.display = "";
+    setSearchMode(true);
+    searchState.query = query;
+    searchState.page = 1;
+    searchState.loaded = 0;
+    await fetchSearchPage(false);
+}
 
-    grid.innerHTML = '<div class="empty-state"><div class="spinner"></div> Searching...</div>';
+async function fetchSearchPage(append) {
+    const grid = document.getElementById("search-results");
+    const more = document.getElementById("search-more");
+    const moreBtn = document.getElementById("load-more-btn");
+    const count = document.getElementById("search-count");
+    const seq = ++searchState.seq;   // drop responses from superseded searches
+    const page = append ? searchState.page + 1 : 1;
+
+    if (append) {
+        moreBtn.disabled = true;
+        moreBtn.textContent = "Loading...";
+    } else {
+        grid.innerHTML = '<div class="empty-state"><div class="spinner"></div> Searching...</div>';
+        more.style.display = "none";
+        count.textContent = "";
+    }
+
+    const params = new URLSearchParams({
+        q: searchState.query,
+        field: currentSearchField(),
+        sort: document.getElementById("search-sort").value,
+        english: document.getElementById("search-english").checked ? "1" : "0",
+        page: String(page),
+    });
 
     try {
-        const resp = await fetch("/api/search?q=" + encodeURIComponent(query));
+        const resp = await fetch("/api/search?" + params);
         const data = await resp.json();
+        if (seq !== searchState.seq) return;
         if (data.error) {
-            grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(data.error)}</div>`;
+            if (!append) grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(data.error)}</div>`;
             return;
         }
-        if (!data.length) {
-            grid.innerHTML = '<div class="empty-state">No results found</div>';
+        const results = data.results || [];
+        searchState.page = page;
+        searchState.total = data.total || 0;
+
+        if (!append && !results.length) {
+            grid.innerHTML = '<div class="empty-state">No results found. Check the spelling, or try searching by Title or Author.</div>';
             return;
         }
-        grid.innerHTML = data.map(renderBookCard).join("");
-        grid.querySelectorAll(".book-card").forEach((card) => {
+        const html = results.map(renderBookCard).join("");
+        if (append) grid.insertAdjacentHTML("beforeend", html);
+        else grid.innerHTML = html;
+        searchState.loaded += results.length;
+
+        grid.querySelectorAll(".book-card:not([data-bound])").forEach((card) => {
+            card.dataset.bound = "1";
             card.addEventListener("click", () => openDownloadModal(JSON.parse(card.dataset.book)));
         });
+        applyCoverFilter();
+        count.textContent = `Showing ${searchState.loaded.toLocaleString()} of ${searchState.total.toLocaleString()}`;
+        more.style.display = searchState.loaded < searchState.total && results.length ? "" : "none";
         fetchAvailability().then(applyAvailabilityBadges);
     } catch (err) {
-        grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
+        if (seq === searchState.seq && !append) {
+            grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
+        }
+    } finally {
+        moreBtn.disabled = false;
+        moreBtn.textContent = "Load more";
     }
 }
 
@@ -186,6 +292,7 @@ function coverPlaceholder(title) {
 function coverFail(img) {
     img.onerror = null;
     img.src = coverPlaceholder(img.dataset.title || img.alt);
+    img.closest(".book-card")?.classList.add("no-cover");
 }
 
 function renderBookCard(book) {
@@ -196,11 +303,14 @@ function renderBookCard(book) {
     if (book.author?.images?.length) cover = book.author.images[0].url;
     if (!cover && book.images?.length) cover = book.images[0].url;
     if (!cover && book.cover) cover = book.cover;
+    const hasCover = !!cover;
     if (!cover) cover = coverPlaceholder(title);
     const bookJson = escapeHtml(JSON.stringify(book));
+    const meta = [year, book.rating ? `★ ${book.rating}` : "", book.editions > 1 ? `${book.editions} editions` : ""]
+        .filter(Boolean).join(" · ");
 
     return `
-        <div class="book-card" data-book="${bookJson}">
+        <div class="book-card${hasCover ? "" : " no-cover"}" data-book="${bookJson}">
             <img class="book-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(title)}" data-title="${escapeHtml(title)}"
                  loading="lazy" onerror="coverFail(this)">
             <div class="book-overlay">
@@ -210,7 +320,7 @@ function renderBookCard(book) {
             <div class="book-info">
                 <div class="book-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
                 <div class="book-author">${escapeHtml(author)}</div>
-                ${year ? `<div class="book-year">${escapeHtml(year)}</div>` : ""}
+                ${meta ? `<div class="book-year">${escapeHtml(meta)}</div>` : ""}
             </div>
         </div>`;
 }
@@ -274,10 +384,9 @@ function renderDiscoveryRow(category) {
 
 async function loadDiscovery() {
     const container = document.getElementById("discovery-content");
-    const searchResults = document.getElementById("search-results");
 
-    container.style.display = "";
-    searchResults.style.display = "none";
+    searchState.seq++;   // cancel any in-flight search render
+    setSearchMode(false);
 
     container.innerHTML = '<div class="discovery-loading"><div class="spinner"></div> Loading discovery...</div>';
 
@@ -897,6 +1006,7 @@ window.testOIDC = async function () {
 // ─── Init ───
 
 // Load current user first, then the rest
+loadSearchPrefs();
 loadCurrentUser().then(() => {
     loadConfig();
     loadDiscovery();

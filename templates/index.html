@@ -80,7 +80,38 @@
             <!-- Search Page -->
             <div id="page-search" class="page active">
                 <div id="discovery-content"></div>
+                <div id="search-toolbar" class="search-toolbar" style="display: none">
+                    <div class="seg" id="search-field" role="group" aria-label="Search in">
+                        <button class="seg-btn active" data-field="all">All</button>
+                        <button class="seg-btn" data-field="title">Title</button>
+                        <button class="seg-btn" data-field="author">Author</button>
+                    </div>
+                    <label class="toolbar-select">
+                        <span>Sort</span>
+                        <select id="search-sort">
+                            <option value="relevance">Best match</option>
+                            <option value="popular" selected>Most read</option>
+                            <option value="rating">Highest rated</option>
+                            <option value="new">Newest</option>
+                            <option value="old">Oldest</option>
+                            <option value="editions">Most editions</option>
+                            <option value="title">Title A–Z</option>
+                        </select>
+                    </label>
+                    <label class="toolbar-check">
+                        <input type="checkbox" id="search-english" checked>
+                        English only
+                    </label>
+                    <label class="toolbar-check">
+                        <input type="checkbox" id="search-covers">
+                        Hide books without covers
+                    </label>
+                    <span id="search-count" class="search-count"></span>
+                </div>
                 <div id="search-results" class="results-grid"></div>
+                <div id="search-more" class="search-more" style="display: none">
+                    <button class="btn btn-secondary" id="load-more-btn">Load more</button>
+                </div>
             </div>
 
             <!-- Requests Page -->
