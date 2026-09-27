@@ -129,7 +129,7 @@ async function doSearch() {
         const resp = await fetch("/api/search?q=" + encodeURIComponent(query));
         const data = await resp.json();
         if (data.error) {
-            grid.innerHTML = `<div class="empty-state">Error: ${data.error}</div>`;
+            grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(data.error)}</div>`;
             return;
         }
         if (!data.length) {
@@ -142,8 +142,50 @@ async function doSearch() {
         });
         fetchAvailability().then(applyAvailabilityBadges);
     } catch (err) {
-        grid.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+        grid.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
     }
+}
+
+// Everything rendered here comes from Open Library, a crowd-edited catalog, and is
+// interpolated into innerHTML, so it must be escaped (#20).
+function escapeHtml(str) {
+    if (str === null || str === undefined) return "";
+    return String(str).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+}
+
+// Generated locally so it can never fail to load. The previous fallback pointed at
+// via.placeholder.com, which is offline: the fallback itself errored, onerror fired
+// again, and every coverless card flashed between a broken image and its alt text.
+function coverPlaceholder(title) {
+    const words = String(title || "No cover").split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+        if (line && (line + " " + w).length > 14) {
+            lines.push(line);
+            line = w;
+            if (lines.length === 5) break;
+        } else {
+            line = (line + " " + w).trim();
+        }
+    }
+    if (line && lines.length < 5) lines.push(line);
+    const text = lines.map((l, i) =>
+        `<text x="100" y="${120 + i * 24}" text-anchor="middle">${escapeHtml(l.length > 16 ? l.slice(0, 15) + "…" : l)}</text>`).join("");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300">` +
+        `<rect width="200" height="300" fill="#1f2937"/>` +
+        `<rect x="12" y="12" width="176" height="276" fill="none" stroke="#ec4899" stroke-opacity=".45" stroke-width="2" rx="6"/>` +
+        `<g font-family="Inter,sans-serif" font-size="17" font-weight="600" fill="#f3f4f6">${text}</g>` +
+        `<text x="100" y="270" text-anchor="middle" font-family="Inter,sans-serif" font-size="12" fill="#9ca3af">No cover</text></svg>`;
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+// onerror handler: detaches itself first so it can only ever run once per image.
+function coverFail(img) {
+    img.onerror = null;
+    img.src = coverPlaceholder(img.dataset.title || img.alt);
 }
 
 function renderBookCard(book) {
@@ -154,21 +196,21 @@ function renderBookCard(book) {
     if (book.author?.images?.length) cover = book.author.images[0].url;
     if (!cover && book.images?.length) cover = book.images[0].url;
     if (!cover && book.cover) cover = book.cover;
-    if (!cover) cover = "https://via.placeholder.com/200x300/1f2937/ec4899?text=No+Cover";
-    const bookJson = JSON.stringify(book).replace(/"/g, "&quot;");
+    if (!cover) cover = coverPlaceholder(title);
+    const bookJson = escapeHtml(JSON.stringify(book));
 
     return `
         <div class="book-card" data-book="${bookJson}">
-            <img class="book-cover" src="${cover}" alt="${title}" loading="lazy"
-                 onerror="this.src='https://via.placeholder.com/200x300/1f2937/ec4899?text=No+Cover'">
+            <img class="book-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(title)}" data-title="${escapeHtml(title)}"
+                 loading="lazy" onerror="coverFail(this)">
             <div class="book-overlay">
-                <div class="book-overlay-title">${title}</div>
-                <div class="book-overlay-author">${author}${year ? " (" + year + ")" : ""}</div>
+                <div class="book-overlay-title">${escapeHtml(title)}</div>
+                <div class="book-overlay-author">${escapeHtml(author)}${year ? " (" + escapeHtml(year) + ")" : ""}</div>
             </div>
             <div class="book-info">
-                <div class="book-title" title="${title}">${title}</div>
-                <div class="book-author">${author}</div>
-                ${year ? `<div class="book-year">${year}</div>` : ""}
+                <div class="book-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+                <div class="book-author">${escapeHtml(author)}</div>
+                ${year ? `<div class="book-year">${escapeHtml(year)}</div>` : ""}
             </div>
         </div>`;
 }
@@ -402,7 +444,7 @@ async function loadRequests() {
 }
 
 function renderRequest(req) {
-    const cover = req.cover_url || "https://via.placeholder.com/50x75/1f2937/ec4899?text=N/A";
+    const cover = req.cover_url || coverPlaceholder(req.title);
     const progress = req.progress || 0;
     const fillClass = req.status === "completed" ? "complete" : req.status === "error" ? "error" : "";
 
@@ -416,27 +458,27 @@ function renderRequest(req) {
                 </div>`;
     } else if (req.status === "error") {
         statusDisplay = `<span class="status-label error">Error</span>
-                ${req.error ? `<div class="request-error" title="${req.error}">${req.error}</div>` : ""}`;
+                ${req.error ? `<div class="request-error" title="${escapeHtml(req.error)}">${escapeHtml(req.error)}</div>` : ""}`;
     } else {
         // downloading
         statusDisplay = `<span class="status-label downloading">Downloading</span>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: ${progress}%"></div>
+                    <div class="progress-fill" style="width: ${Number(progress) || 0}%"></div>
                 </div>`;
     }
 
     return `
         <div class="request-item">
-            <img class="request-cover" src="${cover}" alt="${req.title}"
-                 onerror="this.src='https://via.placeholder.com/50x75/1f2937/ec4899?text=N/A'">
+            <img class="request-cover" src="${escapeHtml(cover)}" alt="${escapeHtml(req.title)}"
+                 data-title="${escapeHtml(req.title)}" onerror="coverFail(this)">
             <div class="request-details">
-                <div class="request-title">${req.title}</div>
-                <div class="request-meta">${req.author || ""}</div>
-                <span class="request-server ${req.server_type}">${req.server_type}</span>
+                <div class="request-title">${escapeHtml(req.title)}</div>
+                <div class="request-meta">${escapeHtml(req.author || "")}</div>
+                <span class="request-server ${escapeHtml(req.server_type)}">${escapeHtml(req.server_type)}</span>
             </div>
             <div class="request-status">
                 ${statusDisplay}
-                <button class="btn btn-small btn-danger delete-btn" data-id="${req.id}" style="margin-top: 0.4rem">Remove</button>
+                <button class="btn btn-small btn-danger delete-btn" data-id="${escapeHtml(req.id)}" style="margin-top: 0.4rem">Remove</button>
             </div>
         </div>`;
 }
