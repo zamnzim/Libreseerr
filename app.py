@@ -740,6 +740,23 @@ def test_config():
 
 # ─── Search & Discovery API (Open Library) ───
 
+# Open Library rejects the default python-requests User-Agent with a 403 (#10)
+# and asks API clients to identify themselves.
+_OL_HEADERS = {"User-Agent": "Libreseerr (+https://github.com/zamnzim/Libreseerr)"}
+
+
+def _ol_get(endpoint, params, timeout=10):
+    """GET an Open Library API endpoint and return the decoded JSON."""
+    resp = http_requests.get(
+        f"https://openlibrary.org/{endpoint}",
+        params=params,
+        headers=_OL_HEADERS,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _normalize_ol_doc(doc):
     """Normalize a single Open Library search.json doc to our book schema."""
     isbns = doc.get("isbn", [])
@@ -749,7 +766,8 @@ def _normalize_ol_doc(doc):
         isbn_13 = isbns[0]
 
     cover_i = doc.get("cover_i")
-    cover = f"https://covers.openlibrary.org/b/id/{cover_i}-M.jpg" if cover_i else ""
+    # default=false turns a missing cover into a 404 (handled by the UI) instead of a blank 1x1 image
+    cover = f"https://covers.openlibrary.org/b/id/{cover_i}-M.jpg?default=false" if cover_i else ""
 
     ol_key = doc.get("key", "")
     ol_id = ol_key.split("/")[-1] if ol_key else ""
@@ -778,7 +796,7 @@ def _normalize_ol_subject_work(work):
     authors = [a.get("name", "") for a in work.get("authors", []) if a.get("name")]
 
     cover_id = work.get("cover_id")
-    cover = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else ""
+    cover = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg?default=false" if cover_id else ""
 
     ol_key = work.get("key", "")
     ol_id = ol_key.split("/")[-1] if ol_key else ""
@@ -803,8 +821,11 @@ def _normalize_ol_subject_work(work):
 
 # Category keys mapped to Open Library API details
 _DISCOVER_CATEGORIES = {
-    "new_releases":   ("search.json",  {"sort": "new", "limit": 20}),
-    "trending":       ("search.json",  {"sort": "rating", "limit": 20}),
+    # search.json returns nothing without a "q" (#21). new_releases gets a
+    # first_publish_year range filled in per request (see discover_books); sorting
+    # by reading-log count instead of raw "new" keeps unvetted junk entries out.
+    "new_releases":   ("search.json",  {"sort": "readinglog", "language": "eng", "limit": 20}),
+    "trending":       ("trending/weekly.json",           {"limit": 20}),
     "best_sellers":   ("search.json",  {"q": "subject:bestsellers", "sort": "rating", "limit": 20}),
     "classics":       ("search.json",  {"q": "subject:classics", "sort": "rating", "limit": 20}),
     "fiction":        ("subjects/fiction.json",          {"limit": 20}),
@@ -825,16 +846,16 @@ def discover_books():
         return jsonify({"error": "Invalid category"}), 400
     try:
         endpoint, params = _DISCOVER_CATEGORIES[category]
-        resp = http_requests.get(
-            f"https://openlibrary.org/{endpoint}",
-            params=params,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        if category == "new_releases":
+            year = datetime.now().year
+            params = {**params, "q": f"first_publish_year:[{year - 1} TO {year}]"}
+        data = _ol_get(endpoint, params)
 
         if endpoint == "search.json":
             results = [_normalize_ol_doc(doc) for doc in data.get("docs", [])]
+        elif endpoint.startswith("trending/"):
+            # /trending/ returns search-style docs under "works"
+            results = [_normalize_ol_doc(doc) for doc in data.get("works", [])]
         else:
             # /subjects/ endpoint returns a "works" array
             results = [_normalize_ol_subject_work(w) for w in data.get("works", [])]
@@ -851,13 +872,7 @@ def search_books():
     if not query:
         return jsonify([])
     try:
-        resp = http_requests.get(
-            "https://openlibrary.org/search.json",
-            params={"q": query, "limit": 20},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = _ol_get("search.json", {"q": query, "limit": 20})
         results = [_normalize_ol_doc(doc) for doc in data.get("docs", [])]
         return jsonify(results)
     except Exception as e:
